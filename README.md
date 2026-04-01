@@ -9,13 +9,13 @@ Lock folders and apps with Touch ID on macOS.
 ## Install
 
 ```bash
-npm install -g tlock
+npm install -g @freyzo/tlock
 ```
 
 Or use directly with npx:
 
 ```bash
-npx tlock ~/Documents/secret
+npx @freyzo/tlock ~/Documents/secret
 ```
 
 > Requires **macOS** and **Node.js ≥ 18**.

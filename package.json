@@ -1,10 +1,13 @@
 {
-  "name": "tlock",
-  "version": "0.1.0",
+  "name": "@freyzo/tlock",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.1.1",
   "description": "Lock folders and apps with Touch ID on macOS",
   "type": "module",
   "bin": {
-    "tlock": "./bin/tlock.js"
+    "tlock": "bin/tlock.js"
   },
   "main": "src/index.js",
   "scripts": {
@@ -26,11 +29,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/freyazou/touch-lock"
+    "url": "git+https://github.com/freyzo/touch-lock.git"
   },
   "homepage": "https://freyazou.com/projects/touch-lock",
   "bugs": {
-    "url": "https://github.com/freyazou/touch-lock/issues"
+    "url": "https://github.com/freyzo/touch-lock/issues"
   },
   "os": [
     "darwin"
