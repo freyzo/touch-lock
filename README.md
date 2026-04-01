@@ -78,7 +78,7 @@ tlock status ~/Documents/private-notes  # detail
 1. `hdiutil create -encryption AES-256` packages the folder into an encrypted DMG
 2. The original folder is deleted
 3. On unlock, `hdiutil attach` mounts the DMG at the original path
-4. Eject the volume (or re-run lock) to re-lock
+4. When finished using the files, **eject** the volume in Finder — the data stays in the encrypted DMG; use `tlock unlock` again next time. Running `tlock <path>` again will error (already registered); use `tlock remove` only if you want a normal folder and to delete the DMG flow
 
 ### Apps
 
@@ -103,7 +103,7 @@ Lock registry is stored at `~/.tlock/config.json`. DMG volumes are stored in `~/
 - **SIP** — cannot lock system apps in `/System/Applications`
 - **Code signing** — app binary rename may invalidate signatures; some apps may need re-allow in Gatekeeper
 - **macOS updates** — app updates may overwrite the wrapper script; re-run `tlock` after updating
-- **Finder visibility** — unlocked DMG volumes appear in Finder sidebar; eject to re-lock
+- **Finder visibility** — unlocked DMG volumes appear in Finder sidebar; **eject** when done (you do not run `tlock` on that path again until `tlock remove`)
 - **Global install recommended** — `auth-gate` subcommand must resolve from the wrapper script; `npx` temp installs may not persist
 
 ## Security Notes

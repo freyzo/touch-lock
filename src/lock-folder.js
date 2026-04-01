@@ -1,5 +1,5 @@
 import { execSync, spawn } from "child_process";
-import { existsSync, statSync, rmSync } from "fs";
+import { existsSync, statSync, rmSync, mkdirSync } from "fs";
 import { resolve, basename } from "path";
 import { createHash } from "crypto";
 import chalk from "chalk";
@@ -121,6 +121,19 @@ function unmountDmg(mountPoint) {
   }
 }
 
+/**
+ * Eject if this path is a volume mount (no-op if not mounted).
+ * Needed before a second `hdiutil attach` of the same DMG (e.g. after `unlock`).
+ */
+function detachIfMounted(mountPoint) {
+  if (!existsSync(mountPoint)) return;
+  try {
+    execSync(`hdiutil detach "${mountPoint}" -force`, { stdio: "ignore" });
+  } catch {
+    /* not a mount or already ejected */
+  }
+}
+
 // ─── Public API ─────────────────────────────────────────────────────
 
 /**
@@ -179,7 +192,11 @@ export async function unlockFolder(folderPath) {
   await mountDmg(entry.dmgPath, absolutePath, password);
 
   console.log(chalk.green(`✓ Unlocked: ${absolutePath}`));
-  console.log(chalk.dim("  Eject the volume or run `tlock lock` again to re-lock."));
+  console.log(
+    chalk.dim(
+      "  When done: eject this volume in Finder (or Disk Utility). Data stays in the encrypted .dmg — run `tlock unlock` again next time. To drop tlock and get a normal folder: `tlock remove <path>`."
+    )
+  );
 }
 
 /**
@@ -201,6 +218,14 @@ export async function removeFolder(folderPath) {
 
   const password = getKeychainPassword();
   const tempMountPoint = resolve(TLOCK_STORAGE_DIR, `mount-${Date.now()}`);
+
+  // Same DMG may already be mounted at absolutePath from a prior `unlock` — second attach fails with "Resource busy"
+  detachIfMounted(absolutePath);
+
+  mkdirSync(tempMountPoint, { recursive: true });
+  if (!existsSync(absolutePath)) {
+    mkdirSync(absolutePath, { recursive: true });
+  }
 
   // Mount to a temp location
   console.log(chalk.dim("Mounting encrypted volume to restore contents..."));
