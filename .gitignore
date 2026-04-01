@@ -5,3 +5,4 @@ node_modules/
 .env.*
 npm-instruction/
 plans/
+docs/

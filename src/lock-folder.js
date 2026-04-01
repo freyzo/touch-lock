@@ -144,6 +144,7 @@ export async function lockFolder(folderPath) {
   validateFolderTarget(absolutePath);
 
   await ensureFirstRunSetup();
+  await authenticate();
 
   const dmgPath = generateDmgPath(absolutePath);
   const password = getKeychainPassword();

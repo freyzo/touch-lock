@@ -90,18 +90,52 @@ const program = new Command();
 program
   .name("tlock")
   .description("Lock folders and apps with Touch ID on macOS")
-  .version("0.1.3");
+  .version("0.1.3")
+  .option("-u, --unlock <target>", "Unlock a locked folder/app")
+  .option("-r, --remove <target>", "Permanently remove lock and restore target");
 
 // Default command: lock a target
 program
   .argument("[target]", "folder path or app name to lock")
   .action(
     withErrorHandling(async (target) => {
-    if (!target) {
-      program.help();
-      return;
-    }
-    const targetType = detectTargetType(target);
+      const options = program.opts();
+      if (options.unlock && options.remove) {
+        throw new Error("Use either --unlock/-u or --remove/-r, not both.");
+      }
+
+      if (options.unlock) {
+        const entry = findEntryForTarget(options.unlock);
+        if (!entry) {
+          throw new Error(`No lock found for: ${options.unlock}`);
+        }
+        if (entry.type === "folder") {
+          await unlockFolder(entry.target);
+        } else {
+          await unlockApp(entry.target);
+        }
+        return;
+      }
+
+      if (options.remove) {
+        const entry = findEntryForTarget(options.remove);
+        if (!entry) {
+          throw new Error(`No lock found for: ${options.remove}`);
+        }
+        if (entry.type === "folder") {
+          await removeFolder(entry.target);
+        } else {
+          await removeApp(entry.target);
+        }
+        return;
+      }
+
+      if (!target) {
+        program.help();
+        return;
+      }
+
+      const targetType = detectTargetType(target);
       if (targetType === "app") {
         await lockApp(target);
       } else if (targetType === "folder") {
@@ -109,8 +143,8 @@ program
       } else {
         throw new Error(
           `Cannot determine target type for "${target}". Provide a valid folder path or .app name.`
-);
-  }
+        );
+      }
     })
 );
 

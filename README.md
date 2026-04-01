@@ -29,6 +29,7 @@ tlock ~/Documents/private-notes
 ```
 
 Creates an AES-256 encrypted DMG and removes the original folder. On first run you'll set a master password stored in macOS Keychain.
+Lock now also prompts Touch ID/password before it proceeds.
 
 ### Lock an app
 
@@ -45,6 +46,8 @@ Intercepts the app binary so Touch ID is required before every launch.
 ```bash
 tlock unlock ~/Documents/private-notes
 tlock unlock Slack
+# shorthand
+tlock -u ~/Documents/private-notes
 ```
 
 Folders are mounted at their original path. Apps launch after authentication.
@@ -54,6 +57,8 @@ Folders are mounted at their original path. Apps launch after authentication.
 ```bash
 tlock remove ~/Documents/private-notes
 tlock remove Slack
+# shorthand
+tlock -r ~/Documents/private-notes
 ```
 
 Restores the original folder/app and removes all tlock metadata.
@@ -70,6 +75,21 @@ tlock list
 tlock status                        # summary
 tlock status ~/Documents/private-notes  # detail
 ```
+
+## Canonical Pen Test
+
+Run the security behavior test case:
+
+```bash
+npm run test:pen
+```
+
+This verifies a real lock/unlock round-trip:
+- lock command reports success
+- direct access to the original folder path fails while locked
+- unlock restores access and original file contents
+
+During the test you may see Touch ID/password prompts.
 
 ## How It Works
 

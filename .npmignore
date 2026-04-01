@@ -6,3 +6,4 @@ timeline.json
 .gitignore
 *.log
 node_modules/
+docs/

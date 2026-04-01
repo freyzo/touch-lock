@@ -11,7 +11,8 @@
   },
   "main": "src/index.js",
   "scripts": {
-    "start": "node bin/tlock.js"
+    "start": "node bin/tlock.js",
+    "test:pen": "bash tests/lock-pen-test.sh"
   },
   "engines": {
     "node": ">=18.0.0"

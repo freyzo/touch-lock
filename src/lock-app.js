@@ -123,6 +123,7 @@ export async function lockApp(appNameOrPath) {
   validateAppTarget(appPath);
 
   await ensureFirstRunSetup();
+  await authenticate();
 
   const executableName = getExecutableName(appPath);
   const macosDir = join(appPath, "Contents", "MacOS");
