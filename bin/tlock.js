@@ -3,7 +3,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { platform } from "os";
-import { resolve } from "path";
+import { resolve, basename } from "path";
 import { existsSync, statSync } from "fs";
 import { lockFolder, unlockFolder, removeFolder } from "../src/lock-folder.js";
 import { lockApp, unlockApp, removeApp } from "../src/lock-app.js";
@@ -20,16 +20,42 @@ function enforceMaxOSPlatform() {
 }
 
 /**
+ * Find registry entry for a user-supplied target (full path, cwd-relative, or folder basename).
+ */
+function findEntryForTarget(target) {
+  const candidates = [
+    resolve(target),
+    resolve(process.cwd(), target),
+    `/Applications/${target}.app`,
+  ];
+  for (const p of candidates) {
+    const entry = getEntry(p);
+    if (entry) return entry;
+  }
+  const base = basename(target.replace(/\/$/, ""));
+  const entries = getLockRegistry();
+  const byBase = entries.filter((e) => basename(e.target) === base);
+  if (byBase.length > 1) {
+    throw new Error(
+      `Multiple locks named "${base}". Use full path. Try:\n  ${byBase.map((e) => `tlock unlock ${e.target}`).join("\n  ")}`
+    );
+  }
+  if (byBase.length === 1) return byBase[0];
+  return null;
+}
+
+/**
  * Detect whether a target is a folder or an app bundle.
  * Returns "folder" | "app" | "unknown".
  */
+
 function detectTargetType(target) {
   if (target.endsWith(".app")) return "app";
   // Bare name — check if it resolves to an app in /Applications
   if (existsSync(`/Applications/${target}.app`)) return "app";
   // Check registry for previously locked target
+  const entry = findEntryForTarget(target);
   const absolutePath = resolve(target);
-  const entry = getEntry(absolutePath);
   if (entry) return entry.type;
   // Check filesystem
   if (existsSync(absolutePath) && statSync(absolutePath).isDirectory()) return "folder";
@@ -94,8 +120,7 @@ program
   .description("Unlock a previously locked folder or app")
   .action(
     withErrorHandling(async (target) => {
-      const absolutePath = resolve(target);
-      const entry = getEntry(absolutePath) || getEntry(`/Applications/${target}.app`);
+      const entry = findEntryForTarget(target);
       if (!entry) {
         throw new Error(`No lock found for: ${target}`);
       }
@@ -137,8 +162,7 @@ program
   .description("Permanently remove lock and restore target")
   .action(
     withErrorHandling(async (target) => {
-      const absolutePath = resolve(target);
-      const entry = getEntry(absolutePath) || getEntry(`/Applications/${target}.app`);
+      const entry = findEntryForTarget(target);
       if (!entry) {
         throw new Error(`No lock found for: ${target}`);
       }
@@ -168,8 +192,7 @@ program
         console.log();
         return;
       }
-      const absolutePath = resolve(target);
-      const entry = getEntry(absolutePath) || getEntry(`/Applications/${target}.app`);
+      const entry = findEntryForTarget(target);
       if (!entry) {
         console.log(chalk.dim(`Not locked: ${target}`));
         return;
