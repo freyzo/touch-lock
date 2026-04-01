@@ -90,7 +90,7 @@ const program = new Command();
 program
   .name("tlock")
   .description("Lock folders and apps with Touch ID on macOS")
-  .version("0.1.0");
+  .version("0.1.2");
 
 // Default command: lock a target
 program
