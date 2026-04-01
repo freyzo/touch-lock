@@ -90,7 +90,7 @@ const program = new Command();
 program
   .name("tlock")
   .description("Lock folders and apps with Touch ID on macOS")
-  .version("0.1.3")
+  .version("0.1.4")
   .option("-u, --unlock <target>", "Unlock a locked folder/app")
   .option("-r, --remove <target>", "Permanently remove lock and restore target");
 
