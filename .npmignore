@@ -1,0 +1,9 @@
+plans/
+home/
+task.yaml
+timeline.json
+.git/
+.gitignore
+*.log
+node_modules/
+docs/

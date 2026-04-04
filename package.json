@@ -1,0 +1,55 @@
+{
+  "name": "@freyzo/tlock",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.1.7",
+  "description": "Lock folders and apps with Touch ID on macOS",
+  "type": "module",
+  "bin": {
+    "tlock": "bin/tlock.js"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node bin/tlock.js",
+    "test:pen": "bash tests/lock-pen-test.sh"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "macos",
+    "touchid",
+    "lock",
+    "encryption",
+    "dmg",
+    "biometric",
+    "cli"
+  ],
+  "author": "Freya Zou <freya@freyazou.com> (https://freyazou.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/freyzo/touch-lock.git"
+  },
+  "homepage": "https://freyazou.com/projects/touch-lock",
+  "bugs": {
+    "url": "https://github.com/freyzo/touch-lock/issues"
+  },
+  "os": [
+    "darwin"
+  ],
+  "files": [
+    "bin/",
+    "src/",
+    "assets/",
+    "README.md"
+  ],
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "figlet": "^1.7.0",
+    "gradient-string": "^2.0.2",
+    "ora": "^8.1.0"
+  }
+}
