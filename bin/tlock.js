@@ -47,8 +47,17 @@ function shouldPrintBanner() {
   return argv.includes("-h") || argv.includes("--help");
 }
 
+function shouldShowBanner() {
+  const args = process.argv.slice(2).filter(a => !a.startsWith("--") || a === "--help" || a === "--version");
+  if (process.argv.includes("auth-gate")) return false;
+  // Show only on: no args, --help/-h, --version/-V
+  const raw = process.argv.slice(2);
+  if (raw.length === 0) return true;
+  if (raw.some(a => a === "--help" || a === "-h" || a === "--version" || a === "-V")) return true;
+  return false;
+}
+
 async function printBanner() {
-  if (process.argv.includes("auth-gate")) return;
   try {
     const font = "ANSI Shadow";
     const rc   = (ch) => figlet.textSync(ch, { font }).split("\n").slice(0, -1);
@@ -184,12 +193,17 @@ function formatDate(isoString) {
 
 const program = new Command();
 
+const blue    = (s) => `\x1b[38;5;33m${s}\x1b[0m`;
+const blueLt  = (s) => `\x1b[38;5;75m${s}\x1b[0m`;
+
 program.configureHelp({
-  styleTitle:          (s) => terra(s),
-  styleCommandText:    (s) => terraLt(s),
-  styleOptionText:     (s) => terra(s),
-  styleArgumentText:   (s) => terraLt(s),
-  styleSubcommandText: (s) => terraLt(s),
+  styleTitle:           (s) => blue(s),
+  styleCommandText:     (s) => blueLt(s),
+  styleOptionText:      (s) => blueLt(s),
+  styleArgumentText:    (s) => terra(s),
+  styleSubcommandText:  (s) => blueLt(s),
+  styleDescriptionText: (s) => chalk.dim(s),
+  styleOptionTerm:      (s) => blueLt(s),
 });
 
 program
@@ -279,19 +293,32 @@ program
     withErrorHandling(async () => {
       const entries = getLockRegistry();
       if (entries.length === 0) {
-        console.log(chalk.dim("No locked targets."));
+        console.log("\n  " + chalk.dim("no locked targets") + "\n");
         return;
       }
-      console.log("\n  " + terra("🔒 locked targets") + "\n");
-      for (const entry of entries) {
-        const typeLabel =
-          entry.type === "folder"
-            ? terra("[folder]")
-            : terraLt("[app]   ");
-        const dateLabel = chalk.dim(formatDate(entry.createdAt));
-        console.log(`  ${typeLabel}  ${entry.target}  ${dateLabel}`);
-      }
+
+      const folders = entries.filter((e) => e.type === "folder");
+      const apps    = entries.filter((e) => e.type === "app");
+
       console.log();
+
+      if (folders.length > 0) {
+        console.log("  " + terra("📁 folders") + "\n");
+        for (const entry of folders) {
+          console.log("    " + blue("→") + "  " + entry.target);
+          console.log("       " + chalk.dim("locked " + formatDate(entry.createdAt)));
+          console.log();
+        }
+      }
+
+      if (apps.length > 0) {
+        console.log("  " + terraLt("🔐 apps") + "\n");
+        for (const entry of apps) {
+          console.log("    " + blue("→") + "  " + entry.target);
+          console.log("       " + chalk.dim("locked " + formatDate(entry.createdAt)));
+          console.log();
+        }
+      }
   })
 );
 
@@ -320,14 +347,16 @@ program
   .action(
     withErrorHandling(async (target) => {
       if (!target) {
-        // Show summary
         const entries = getLockRegistry();
-        const folderCount = entries.filter((e) => e.type === "folder").length;
-        const appCount = entries.filter((e) => e.type === "app").length;
-        console.log("\n  " + terra("tlock status") + "\n");
-        console.log(`  ${chalk.dim("folders")}  ${terra(folderCount)}`);
-        console.log(`  ${chalk.dim("apps    ")}  ${terra(appCount)}`);
-        console.log(`  ${chalk.dim("total   ")}  ${terra(entries.length)}`);
+        const folders = entries.filter((e) => e.type === "folder");
+        const apps    = entries.filter((e) => e.type === "app");
+        const num     = (n) => n > 0 ? terra(String(n)) : chalk.dim("0");
+
+        console.log("\n  " + blue("tlock status") + "\n");
+        console.log(`  📁  ${chalk.dim("folders")}   ${num(folders.length)}`);
+        console.log(`  🔐  ${chalk.dim("apps")}      ${num(apps.length)}`);
+        console.log("  " + chalk.dim("─".repeat(22)));
+        console.log(`  📊  ${chalk.dim("total")}     ${num(entries.length)}`);
         console.log();
         return;
       }
@@ -362,5 +391,5 @@ program
 // ─── Run ────────────────────────────────────────────────────────────
 
 enforceMaxOSPlatform();
-if (shouldPrintBanner()) await printBanner();
+if (shouldShowBanner()) await printBanner();
 program.parse();

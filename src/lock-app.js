@@ -53,9 +53,25 @@ function getExecutableName(appPath) {
     throw new Error(`No Info.plist found at: ${plistPath}`);
   }
 
+  // Detect Safari Web Apps (PWAs) — they have no binary to lock
   try {
-    const executableName = execFileSync("defaults", [
-      "read", plistPath, "CFBundleExecutable",
+    const isTemplate = execFileSync("plutil", [
+      "-extract", "LSTemplateApplication", "raw", "-o", "-", plistPath,
+    ], { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }).trim();
+    if (isTemplate === "true") {
+      throw new Error(
+        `${appPath} is a Safari Web App (PWA) and has no executable.\n` +
+        `  tlock only works with native .app bundles (e.g. GitHub.app, Brave Browser.app).`
+      );
+    }
+  } catch (e) {
+    if (e.message.includes("Safari Web App")) throw e;
+    // LSTemplateApplication not present — that's fine, continue
+  }
+
+  try {
+    const executableName = execFileSync("plutil", [
+      "-extract", "CFBundleExecutable", "raw", "-o", "-", plistPath,
     ], { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }).trim();
 
     if (!executableName) {
@@ -63,6 +79,7 @@ function getExecutableName(appPath) {
     }
     return executableName;
   } catch (error) {
+    if (error.message.includes("Safari Web App")) throw error;
     throw new Error(`Could not read CFBundleExecutable from ${plistPath}: ${error.message}`);
   }
 }

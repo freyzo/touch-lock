@@ -12,7 +12,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node bin/tlock.js",
-    "test:pen": "bash tests/lock-pen-test.sh"
+    "test:pen": "bash tests/lock-pen-test.sh",
+    "postinstall": "[ \"$npm_config_global\" = \"true\" ] && node bin/tlock.js || true"
   },
   "engines": {
     "node": ">=18.0.0"
