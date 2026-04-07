@@ -206,7 +206,7 @@ export async function ensureFirstRunSetup() {
   }
   const password = await promptNewPassword();
   setKeychainPassword(password);
-  console.log(chalk.green("✓ Master password saved to macOS Keychain.\n"));
+  console.log(chalk.green("Master password saved to macOS Keychain.\n"));
 }
 
 // ─── Brute-force tracking ───────────────────────────────────────────
@@ -274,7 +274,7 @@ export async function authenticate() {
 
   if (biometricResult === "success") {
     clearFailures();
-    console.log(chalk.green("✓ Authenticated via Touch ID."));
+    console.log(chalk.green("Authenticated via Touch ID."));
     return true;
   }
 
@@ -299,7 +299,7 @@ export async function authenticate() {
   }
 
   clearFailures();
-  console.log(chalk.green("✓ Authenticated via password."));
+  console.log(chalk.green("Authenticated via password."));
   return true;
 }
 

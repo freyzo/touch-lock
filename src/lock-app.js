@@ -11,6 +11,7 @@ import { resolve, basename, join } from "path";
 import chalk from "chalk";
 import { addEntry, getEntry, removeEntry } from "./config.js";
 import { authenticate, ensureFirstRunSetup } from "./auth.js";
+import { printKvBox } from "./tui.js";
 
 const ORIGINAL_BINARY_SUFFIX = ".tlock-original";
 
@@ -151,7 +152,9 @@ export async function lockApp(appNameOrPath) {
   }
 
   // Rename original binary
-  console.log(chalk.dim(`Renaming binary: ${executableName} → ${executableName}${ORIGINAL_BINARY_SUFFIX}`));
+  console.log(
+    chalk.dim(`Renaming binary: ${executableName} -> ${executableName}${ORIGINAL_BINARY_SUFFIX}`)
+  );
   renameSync(binaryPath, renamedBinaryPath);
 
   // Install wrapper script at the original binary path
@@ -165,8 +168,15 @@ export async function lockApp(appNameOrPath) {
     executableName,
   });
 
-  console.log(chalk.green(`✓ Locked: ${basename(appPath)}`));
-  console.log(chalk.dim("  App will now require Touch ID / password before launching."));
+  console.log();
+  printKvBox(
+    "LOCKED APP",
+    [
+      [chalk.dim("App"), chalk.green(basename(appPath))],
+      [chalk.dim("Note"), chalk.dim("Touch ID or password required before launch.")],
+    ],
+    { titleStyle: chalk.cyan }
+  );
 }
 
 /**
@@ -191,7 +201,12 @@ export async function unlockApp(appNameOrPath) {
     throw new Error(`Original binary missing: ${renamedBinaryPath}`);
   }
 
-  console.log(chalk.green(`✓ Launching ${basename(appPath)}...`));
+  console.log();
+  printKvBox(
+    "LAUNCH",
+    [[chalk.dim("App"), chalk.green(basename(appPath))]],
+    { titleStyle: chalk.cyan }
+  );
   execFileSync("open", ["-a", appPath], { stdio: "ignore" });
 }
 
@@ -224,7 +239,12 @@ export async function removeApp(appNameOrPath) {
 
   removeEntry(appPath);
 
-  console.log(chalk.green(`✓ Unlocked permanently: ${basename(appPath)}`));
+  console.log();
+  printKvBox(
+    "UNLOCKED APP",
+    [[chalk.dim("App"), chalk.green(basename(appPath))]],
+    { titleStyle: chalk.cyan }
+  );
 }
 
 export default { lockApp, unlockApp, removeApp };

@@ -34,7 +34,7 @@ printf "%s\n" "$MARKER_VALUE" > "$MARKER_FILE"
 echo "== Step 1: lock folder =="
 LOCK_OUT="$(tlock "$TARGET" 2>&1 || true)"
 echo "$LOCK_OUT"
-if ! printf "%s" "$LOCK_OUT" | rg -q "✓ Locked:"; then
+if ! printf "%s" "$LOCK_OUT" | rg -q "LOCKED FOLDER"; then
   echo "FAIL: lock command did not report success."
   exit 1
 fi
@@ -54,7 +54,7 @@ echo "== Step 3: unlock and verify access restored =="
 echo "You may be prompted for Touch ID/password."
 UNLOCK_OUT="$(tlock unlock "$TARGET" 2>&1 || true)"
 echo "$UNLOCK_OUT"
-if ! printf "%s" "$UNLOCK_OUT" | rg -q "✓ Unlocked:"; then
+if ! printf "%s" "$UNLOCK_OUT" | rg -q "UNLOCKED FOLDER"; then
   echo "FAIL: unlock command did not report success."
   exit 1
 fi

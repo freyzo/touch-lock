@@ -12,8 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const VERSION = JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf-8")).version;
 
 // ─── Shared color helpers ────────────────────────────────────────────
-const terra    = (s) => `\x1b[38;5;166m${s}\x1b[0m`;
-const terraLt  = (s) => `\x1b[38;5;172m${s}\x1b[0m`;
+const terra = (s) => `\x1b[38;5;166m${s}\x1b[0m`;
 
 // Blue gradient matching #176be8: dark navy → royal blue → sky blue
 // xterm-256: 18=#000087  19=#0000af  26=#005fd7  27=#005fff  33=#0087ff  75=#5fafff
@@ -116,6 +115,11 @@ import { lockFolder, unlockFolder, removeFolder } from "../src/lock-folder.js";
 import { lockApp, unlockApp, removeApp } from "../src/lock-app.js";
 import { authenticate } from "../src/auth.js";
 import { getLockRegistry, getEntry } from "../src/config.js";
+import {
+  printLockedTargetsTable,
+  printStatusSummary,
+  printEntryStatus,
+} from "../src/tui.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -176,7 +180,7 @@ function withErrorHandling(asyncAction) {
     try {
       await asyncAction(...args);
     } catch (error) {
-      console.error(chalk.red(`\n✗ ${error.message}`));
+      console.error(chalk.red(`\nError: ${error.message}`));
       process.exit(1);
     }
   };
@@ -293,32 +297,11 @@ program
     withErrorHandling(async () => {
       const entries = getLockRegistry();
       if (entries.length === 0) {
-        console.log("\n  " + chalk.dim("no locked targets") + "\n");
+        console.log("\n  " + chalk.dim("No locked targets.") + "\n");
         return;
       }
 
-      const folders = entries.filter((e) => e.type === "folder");
-      const apps    = entries.filter((e) => e.type === "app");
-
-      console.log();
-
-      if (folders.length > 0) {
-        console.log("  " + terra("📁 folders") + "\n");
-        for (const entry of folders) {
-          console.log("    " + blue("→") + "  " + entry.target);
-          console.log("       " + chalk.dim("locked " + formatDate(entry.createdAt)));
-          console.log();
-        }
-      }
-
-      if (apps.length > 0) {
-        console.log("  " + terraLt("🔐 apps") + "\n");
-        for (const entry of apps) {
-          console.log("    " + blue("→") + "  " + entry.target);
-          console.log("       " + chalk.dim("locked " + formatDate(entry.createdAt)));
-          console.log();
-        }
-      }
+      printLockedTargetsTable(entries, formatDate);
   })
 );
 
@@ -350,14 +333,8 @@ program
         const entries = getLockRegistry();
         const folders = entries.filter((e) => e.type === "folder");
         const apps    = entries.filter((e) => e.type === "app");
-        const num     = (n) => n > 0 ? terra(String(n)) : chalk.dim("0");
 
-        console.log("\n  " + blue("tlock status") + "\n");
-        console.log(`  📁  ${chalk.dim("folders")}   ${num(folders.length)}`);
-        console.log(`  🔐  ${chalk.dim("apps")}      ${num(apps.length)}`);
-        console.log("  " + chalk.dim("─".repeat(22)));
-        console.log(`  📊  ${chalk.dim("total")}     ${num(entries.length)}`);
-        console.log();
+        printStatusSummary(folders.length, apps.length, entries.length);
         return;
       }
       const entry = findEntryForTarget(target);
@@ -365,12 +342,8 @@ program
         console.log(chalk.dim(`Not locked: ${target}`));
         return;
       }
-      console.log("\n  " + terra("🔒 " + entry.target) + "\n");
-      console.log(`  ${chalk.dim("type      ")}  ${entry.type}`);
-      console.log(`  ${chalk.dim("locked at ")}  ${formatDate(entry.createdAt)}`);
-      if (entry.dmgPath) {
-        console.log(`  ${chalk.dim("dmg       ")}  ${entry.dmgPath}`);
-      }
+      console.log();
+      printEntryStatus(entry, formatDate);
       console.log();
   })
 );

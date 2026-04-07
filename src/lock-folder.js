@@ -6,8 +6,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { addEntry, getEntry, removeEntry, TLOCK_STORAGE_DIR } from "./config.js";
 import { authenticate, getKeychainPassword, ensureFirstRunSetup } from "./auth.js";
-
-const terraAnsi = (s) => `\x1b[38;5;166m${s}\x1b[0m`;
+import { printKvBox } from "./tui.js";
 
 /**
  * Generate a deterministic DMG filename from the folder path.
@@ -175,20 +174,24 @@ export async function lockFolder(folderPath) {
   try {
     await createEncryptedDmg(absolutePath, dmgPath, password);
   } catch (err) {
-    spinner.fail(chalk.red(`Encryption failed: ${err.message}`));
+    spinner.stop();
+    console.error(chalk.red(`Encryption failed: ${err.message}`));
     throw err;
   }
 
   if (!existsSync(dmgPath)) {
-    spinner.fail(chalk.red("DMG not found after creation — aborting to protect data."));
+    spinner.stop();
+    console.error(chalk.red("DMG not found after creation — aborting to protect data."));
     throw new Error("DMG creation succeeded but file not found — aborting to protect data.");
   }
   chmodSync(dmgPath, 0o600);
-  spinner.succeed(terraAnsi(`Encrypted volume created`));
+  spinner.stop();
+  console.log(chalk.green("  Encrypted volume created"));
 
   const rmSpinner = ora({ text: chalk.dim("Removing original folder..."), color: "yellow", spinner: "dots" }).start();
   rmSync(absolutePath, { recursive: true, force: true });
-  rmSpinner.succeed(chalk.dim("Original folder removed"));
+  rmSpinner.stop();
+  console.log(chalk.dim("  Original folder removed"));
 
   addEntry({
     target: absolutePath,
@@ -197,8 +200,15 @@ export async function lockFolder(folderPath) {
     originalPath: absolutePath,
   });
 
-  console.log(chalk.green(`✓ Locked: ${absolutePath}`));
-  console.log(chalk.dim(`  DMG stored at: ${dmgPath}`));
+  console.log();
+  printKvBox(
+    "LOCKED FOLDER",
+    [
+      [chalk.dim("Path"), chalk.green(absolutePath)],
+      [chalk.dim("DMG"), chalk.dim(dmgPath)],
+    ],
+    { titleStyle: chalk.cyan }
+  );
 }
 
 /**
@@ -223,12 +233,19 @@ export async function unlockFolder(folderPath) {
   try {
     await mountDmg(entry.dmgPath, absolutePath, password);
   } catch (err) {
-    spinner.fail(chalk.red(`Mount failed: ${err.message}`));
+    spinner.stop();
+    console.error(chalk.red(`Mount failed: ${err.message}`));
     throw err;
   }
-  spinner.succeed(terraAnsi("Volume mounted"));
+  spinner.stop();
+  console.log(chalk.green("  Volume mounted"));
 
-  console.log(chalk.green(`✓ Unlocked: ${absolutePath}`));
+  console.log();
+  printKvBox(
+    "UNLOCKED FOLDER",
+    [[chalk.dim("Path"), chalk.green(absolutePath)]],
+    { titleStyle: chalk.cyan }
+  );
   console.log(
     chalk.dim(
       "  When done: eject this volume in Finder (or Disk Utility). Data stays in the encrypted .dmg — run `tlock unlock` again next time. To drop tlock and get a normal folder: `tlock remove <path>`."
@@ -269,15 +286,18 @@ export async function removeFolder(folderPath) {
   try {
     await mountDmg(entry.dmgPath, tempMountPoint, password);
   } catch (err) {
-    spinner.fail(chalk.red(`Mount failed: ${err.message}`));
+    spinner.stop();
+    console.error(chalk.red(`Mount failed: ${err.message}`));
     throw err;
   }
 
   try {
     execFileSync("cp", ["-R", `${tempMountPoint}/`, absolutePath], { stdio: "ignore" });
-    spinner.succeed(terraAnsi("Contents restored"));
+    spinner.stop();
+    console.log(chalk.green("  Contents restored"));
   } catch (err) {
-    spinner.fail(chalk.red(`Restore failed: ${err.message}`));
+    spinner.stop();
+    console.error(chalk.red(`Restore failed: ${err.message}`));
     throw err;
   } finally {
     try { unmountDmg(tempMountPoint); } catch { /* best effort */ }
@@ -288,7 +308,12 @@ export async function removeFolder(folderPath) {
   rmSync(entry.dmgPath, { force: true });
   removeEntry(absolutePath);
 
-  console.log(chalk.green(`✓ Permanently restored: ${absolutePath}`));
+  console.log();
+  printKvBox(
+    "RESTORED",
+    [[chalk.dim("Path"), chalk.green(absolutePath)]],
+    { titleStyle: chalk.cyan }
+  );
 }
 
 export default { lockFolder, unlockFolder, removeFolder };
