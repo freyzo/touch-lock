@@ -48,10 +48,11 @@ export function printKvBox(title, rows, opts = {}) {
     return `${lbl}  ${value}`;
   });
 
+  // Width from content only — no fixed minimum (avoids huge empty space on short panels).
   const innerW = Math.max(
     stripAnsi(title).length,
     ...rowTexts.map((r) => vlen(r)),
-    28
+    0
   );
 
   const top = indent + border(B.tl + hr(innerW + 2) + B.tr);
