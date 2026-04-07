@@ -14,6 +14,14 @@
   <a href="https://www.npmjs.com/package/@freyzo/tlock"><img src="https://img.shields.io/badge/npm-@freyzo/tlock-CB3837?style=for-the-badge&logo=npm&logoColor=white" alt="npm" /></a>
 </p>
 
+**Install the CLI globally** so `tlock` is on your PATH:
+
+`npm i -g @freyzo/tlock`
+
+The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). For this tool you want **`-g`**; otherwise the `tlock` command may not be available in your shell.
+
+---
+
 ## About
 
 **Problem**
@@ -46,6 +54,8 @@
 ---
 
 ## Install
+
+Use **global** install (required for the `tlock` command):
 
 ```bash
 npm i -g @freyzo/tlock
