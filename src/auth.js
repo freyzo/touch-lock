@@ -1,157 +1,111 @@
 import { execFileSync } from "child_process";
 import { createInterface } from "readline";
-import { createHash, timingSafeEqual } from "crypto";
-import { existsSync, readFileSync, writeFileSync, appendFileSync, chmodSync, unlinkSync, renameSync, readdirSync } from "fs";
+import { existsSync, readFileSync, appendFileSync, unlinkSync, renameSync } from "fs";
 import { join } from "path";
 import chalk from "chalk";
-import { TLOCK_STORAGE_DIR, ensureStorageDir } from "./config.js";
+import { TLOCK_STORAGE_DIR, ensureStorageDir, getLockRegistry } from "./config.js";
+import { BIN } from "./bins.js";
+import {
+  vaultExists,
+  createVault,
+  restoreVault,
+  hasOrphanedKeys,
+  openVaultWithSecureEnclave,
+  openVaultWithPassphrase,
+  refreshSecureEnclave,
+  imageKeyPath,
+  writeImageKey,
+  readImageKey,
+} from "./vault.js";
 
 const AUTH_FAILURES_FILE = join(TLOCK_STORAGE_DIR, ".auth-failures");
 const MAX_FAILURES = 5;
 const COOLDOWN_WINDOW_MS = 60_000;
-const MIN_PASSWORD_LENGTH = 8;
+const MIN_PASSPHRASE_LENGTH = 12;
 
-const KEYCHAIN_SERVICE = "tlock";
-const KEYCHAIN_ACCOUNT = "master";
+// ─── Legacy Keychain password (tlock 0.1.x) ─────────────────────────
 
-// ─── Keychain (macOS `security` CLI wrapper) ────────────────────────
+const LEGACY_KEYCHAIN_ITEM = ["-s", "tlock", "-a", "master"];
 
 /**
- * Store the master password in the login keychain.
- * Sent to `security -i` on stdin (hex-encoded) so it never appears in any process's argv.
+ * The old master password that encrypted pre-vault images, or null once migrated.
  */
-function setKeychainPassword(password) {
-  const hex = Buffer.from(password, "utf-8").toString("hex");
+export function getLegacyPassword() {
   try {
-    execFileSync("security", ["-i"], {
-      input: `add-generic-password -U -s ${KEYCHAIN_SERVICE} -a ${KEYCHAIN_ACCOUNT} -X ${hex}\n`,
-      stdio: ["pipe", "ignore", "pipe"],
+    return execFileSync(BIN.security, ["find-generic-password", ...LEGACY_KEYCHAIN_ITEM, "-w"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function deleteLegacyPassword() {
+  try {
+    execFileSync(BIN.security, ["delete-generic-password", ...LEGACY_KEYCHAIN_ITEM], { stdio: "ignore" });
+  } catch {
+    // Already gone.
+  }
+}
+
+function changeImagePassphrase(imagePath, oldPassphrase, newPassphrase) {
+  try {
+    execFileSync(BIN.hdiutil, ["chpass", "-oldstdinpass", "-newstdinpass", imagePath], {
+      input: `${oldPassphrase}\0${newPassphrase}\0`,
+      stdio: ["pipe", "ignore", "ignore"],
     });
-  } catch (error) {
-    throw new Error(`Failed to store password in Keychain: ${String(error.stderr || error.message).trim()}`);
-  }
-  const stored = getKeychainPassword();
-  if (stored === null || !passwordsMatch(password, stored)) {
-    throw new Error("Keychain did not return the password just stored. Check Keychain Access for a \"tlock\" item.");
+    return true;
+  } catch {
+    return false;
   }
 }
 
 /**
- * Retrieve the master password from the login keychain, or null if none exists.
+ * Re-key a legacy image to a random vault key. The .pending key file is never overwritten,
+ * so a crash between chpass and rename cannot lose the new key.
  */
-export function getKeychainPassword() {
+function migrateImage(imagePath, legacyPassword, vmk) {
+  const keyPath = imageKeyPath(imagePath);
+  const pendingPath = `${keyPath}.pending`;
   try {
-    const result = execFileSync("security", [
-      "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w",
-    ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
-    // Existing images were encrypted with the trimmed value, so keep trimming.
-    return result.trim();
+    const newKey = existsSync(pendingPath) ? readImageKey(pendingPath, vmk) : writeImageKey(pendingPath, vmk);
+    const rekeyed = changeImagePassphrase(imagePath, legacyPassword, newKey) ||
+      changeImagePassphrase(imagePath, newKey, newKey);
+    if (!rekeyed) return false;
+    renameSync(pendingPath, keyPath);
+    return true;
   } catch {
-    return null;
-  }
-}
-
-function hasStoredPassword() {
-  return getKeychainPassword() !== null;
-}
-
-// ─── Touch ID (Swift subprocess bridge) ─────────────────────────────
-
-const TOUCHID_SWIFT_SOURCE = `
-import LocalAuthentication
-import Foundation
-
-let context = LAContext()
-var error: NSError?
-
-guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
-    fputs("unavailable", stderr)
-    exit(2)
-}
-
-let semaphore = DispatchSemaphore(value: 0)
-var success = false
-
-context.evaluatePolicy(
-    .deviceOwnerAuthenticationWithBiometrics,
-    localizedReason: "tlock needs to verify your identity"
-) { result, _ in
-    success = result
-    semaphore.signal()
-}
-
-semaphore.wait()
-exit(success ? 0 : 1)
-`;
-
-// Named by source hash so an upgraded tlock never runs a stale helper.
-const HELPER_NAME_PATTERN = /^touchid-helper(-[0-9a-f]{12})?$/;
-const TOUCHID_BINARY = join(
-  TLOCK_STORAGE_DIR,
-  `touchid-helper-${createHash("sha256").update(TOUCHID_SWIFT_SOURCE).digest("hex").slice(0, 12)}`
-);
-
-function ensureCompiledHelper() {
-  if (existsSync(TOUCHID_BINARY)) return TOUCHID_BINARY;
-
-  ensureStorageDir();
-  const srcFile = `${TOUCHID_BINARY}.${process.pid}.swift`;
-  const tempBinary = `${TOUCHID_BINARY}.${process.pid}.tmp`;
-  writeFileSync(srcFile, TOUCHID_SWIFT_SOURCE, { mode: 0o600 });
-  try {
-    execFileSync("swiftc", [
-      "-o", tempBinary,
-      "-framework", "LocalAuthentication",
-      srcFile,
-    ], { stdio: "ignore" });
-    chmodSync(tempBinary, 0o700);
-    renameSync(tempBinary, TOUCHID_BINARY);
-  } catch {
-    try { unlinkSync(tempBinary); } catch { /* never created */ }
-    return null;
-  } finally {
-    try { unlinkSync(srcFile); } catch { /* ignore */ }
-  }
-  removeOldHelpers();
-  return TOUCHID_BINARY;
-}
-
-function removeOldHelpers() {
-  for (const name of readdirSync(TLOCK_STORAGE_DIR)) {
-    const helperPath = join(TLOCK_STORAGE_DIR, name);
-    if (HELPER_NAME_PATTERN.test(name) && helperPath !== TOUCHID_BINARY) {
-      try { unlinkSync(helperPath); } catch { /* ignore */ }
-    }
+    return false;
   }
 }
 
 /**
- * Attempt Touch ID authentication.
- * Returns: "success" | "failed" | "unavailable"
+ * Move folders locked with the old Keychain password onto vault keys, then delete that password.
  */
-function authenticateWithTouchID() {
-  let binary = null;
-  try { binary = ensureCompiledHelper(); } catch { /* fall back to the interpreter */ }
+function migrateLegacyLocks(vmk) {
+  const legacyPassword = getLegacyPassword();
+  if (legacyPassword === null) return;
 
-  try {
-    if (binary) {
-      execFileSync(binary, [], {
-        stdio: ["ignore", "ignore", "pipe"],
-        timeout: 30000,
-      });
-    } else {
-      execFileSync("swift", ["-e", TOUCHID_SWIFT_SOURCE], {
-        stdio: ["ignore", "ignore", "pipe"],
-        timeout: 30000,
-      });
+  const legacyEntries = getLockRegistry().filter(
+    (entry) => entry.type === "folder" && !existsSync(imageKeyPath(entry.dmgPath))
+  );
+  const stuck = [];
+  for (const entry of legacyEntries) {
+    if (!existsSync(entry.dmgPath) || !migrateImage(entry.dmgPath, legacyPassword, vmk)) {
+      stuck.push(entry.target);
     }
-    return "success";
-  } catch (error) {
-    if (error.status === 2) {
-      return "unavailable";
-    }
-    return "failed";
   }
+  if (stuck.length > 0) {
+    console.log(chalk.yellow(
+      `Could not re-key (image missing or busy): ${stuck.join(", ")}\n  The old password stays in Keychain until these are fixed or removed.`
+    ));
+    return;
+  }
+  deleteLegacyPassword();
+  console.log(chalk.dim(legacyEntries.length > 0
+    ? `Re-keyed ${legacyEntries.length} locked folder(s) and removed the old password from Keychain.`
+    : "Removed the old tlock password from Keychain."));
 }
 
 // ─── Interactive password prompt ────────────────────────────────────
@@ -162,7 +116,7 @@ function authenticateWithTouchID() {
 function promptPasswordDialog(message) {
   const label = message.replace(/:\s*$/, "");
   try {
-    const answer = execFileSync("osascript", [
+    const answer = execFileSync(BIN.osascript, [
       "-e",
       `text returned of (display dialog "${label}" default answer "" with hidden answer with title "tlock" with icon caution)`,
     ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
@@ -210,41 +164,54 @@ async function promptPassword(message = "Enter password: ") {
 }
 
 /**
- * Prompt the user to create a new master password (with confirmation).
+ * Prompt the user to create the recovery passphrase (with confirmation).
  */
-async function promptNewPassword() {
-  console.log(chalk.cyan("First-time setup — create a master password for tlock."));
-  console.log(chalk.dim("This is your fallback if Touch ID is unavailable.\n"));
+async function promptNewPassphrase() {
+  console.log(chalk.cyan("First-time setup — create a recovery passphrase for tlock."));
+  console.log(chalk.dim("Day to day, Touch ID or your Mac login password unlocks. The recovery passphrase is never stored."));
+  console.log(chalk.dim("If you forget it and this Mac's Secure Enclave key is lost (new Mac, reinstall), locked folders cannot be recovered.\n"));
 
-  const password = await promptPassword("Create password: ");
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
-  }
-  if (password !== password.trim()) {
-    throw new Error("Password cannot start or end with a space.");
+  const passphrase = await promptPassword("Create recovery passphrase: ");
+  if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
+    throw new Error(`Recovery passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters.`);
   }
 
-  const confirmation = await promptPassword("Confirm password: ");
-  if (password !== confirmation) {
-    throw new Error("Passwords do not match.");
+  const confirmation = await promptPassword("Confirm recovery passphrase: ");
+  if (passphrase !== confirmation) {
+    throw new Error("Passphrases do not match.");
   }
 
-  return password;
+  return passphrase;
 }
 
 // ─── First-run setup ────────────────────────────────────────────────
 
 /**
- * Ensure a master password exists in the Keychain.
- * If not, prompt the user to create one.
+ * Create the vault on first use, or rebuild a lost vault.json from existing key files.
+ * Returns the vault key if it did either, else null.
  */
-export async function ensureFirstRunSetup() {
-  if (hasStoredPassword()) {
-    return;
+async function ensureVault() {
+  if (vaultExists()) return null;
+
+  let created;
+  if (hasOrphanedKeys()) {
+    console.log(chalk.yellow("tlock's vault.json is missing. Enter your recovery passphrase to rebuild it."));
+    checkCooldown();
+    created = restoreVault(await promptPassword("Recovery passphrase: "));
+    if (!created) {
+      recordFailure();
+      throw new Error("That passphrase does not open any locked folder.");
+    }
+    clearFailures();
+  } else {
+    created = createVault(await promptNewPassphrase());
+    console.log(chalk.green("Recovery passphrase set. It is not stored anywhere, so keep it safe."));
   }
-  const password = await promptNewPassword();
-  setKeychainPassword(password);
-  console.log(chalk.green("Master password saved to macOS Keychain.\n"));
+  if (!created.secureEnclave) {
+    console.log(chalk.yellow("Secure Enclave unavailable: tlock will ask for the recovery passphrase each time."));
+  }
+  console.log();
+  return created.vmk;
 }
 
 // ─── Brute-force tracking ───────────────────────────────────────────
@@ -281,57 +248,50 @@ function checkCooldown() {
   }
 }
 
-function safeEqual(a, b) {
-  const bufferA = Buffer.from(a);
-  const bufferB = Buffer.from(b);
-  return bufferA.length === bufferB.length && timingSafeEqual(bufferA, bufferB);
-}
-
-// `security -w` prints non-ASCII passwords as hex.
-function passwordsMatch(entered, stored) {
-  const candidate = entered.trim();
-  return safeEqual(candidate, stored) ||
-    safeEqual(Buffer.from(candidate, "utf-8").toString("hex"), stored.toLowerCase());
-}
-
 // ─── Main authenticate flow ─────────────────────────────────────────
 
-/**
- * Touch ID first; if it fails or is unavailable, the master password
- * (rate-limited, timing-safe compare). Throws on failure.
- */
-export async function authenticate() {
+const FALLBACK_MESSAGES = {
+  "not-enrolled": "Touch ID is not set up for tlock on this Mac — use your recovery passphrase.",
+  unavailable: "Secure Enclave unavailable — use your recovery passphrase.",
+  denied: "Not authenticated — falling back to the recovery passphrase.",
+  broken: "This Mac's Secure Enclave key no longer opens the vault (new Mac or reinstall?) — use your recovery passphrase.",
+};
+
+async function unlockVault(reason) {
   console.log(chalk.dim("Authenticating..."));
-
-  const biometricResult = authenticateWithTouchID();
-
-  if (biometricResult === "success") {
+  const result = openVaultWithSecureEnclave(reason);
+  if (result.vmk) {
     clearFailures();
-    console.log(chalk.green("Authenticated via Touch ID."));
-    return;
+    console.log(chalk.green("Authenticated."));
+    return result.vmk;
   }
-
-  if (biometricResult === "unavailable") {
-    console.log(chalk.dim("Touch ID unavailable — falling back to password."));
-  } else {
-    console.log(chalk.dim("Touch ID failed — falling back to password."));
-  }
+  console.log(chalk.dim(FALLBACK_MESSAGES[result.status]));
 
   checkCooldown();
-  const storedPassword = getKeychainPassword();
-  if (!storedPassword) {
-    throw new Error("No master password found. Run tlock on a target first to set one up.");
-  }
-
-  const enteredPassword = await promptPassword("Enter master password: ");
-  if (!passwordsMatch(enteredPassword, storedPassword)) {
+  const vmk = openVaultWithPassphrase(await promptPassword("Recovery passphrase: "));
+  if (!vmk) {
     recordFailure();
     const remaining = MAX_FAILURES - getRecentFailures().length;
     throw new Error(
-      `Incorrect password.${remaining > 0 ? ` ${remaining} attempt(s) remaining.` : " Account locked temporarily."}`
+      `Incorrect passphrase.${remaining > 0 ? ` ${remaining} attempt(s) remaining.` : " Locked temporarily."}`
     );
   }
-
   clearFailures();
-  console.log(chalk.green("Authenticated via password."));
+  console.log(chalk.green("Authenticated via recovery passphrase."));
+
+  if ((result.status === "broken" || result.status === "not-enrolled") && refreshSecureEnclave(vmk)) {
+    console.log(chalk.dim("Touch ID / login password unlocking re-enabled for this Mac."));
+  }
+  return vmk;
+}
+
+/**
+ * Touch ID or the Mac login password (enforced by the Secure Enclave), else the recovery passphrase.
+ * Sets the vault up on first use and returns the vault key. Throws on failure.
+ * reason completes the macOS prompt "tlock is trying to …".
+ */
+export async function authenticate(reason = "verify your identity") {
+  const vmk = (await ensureVault()) || (await unlockVault(reason));
+  migrateLegacyLocks(vmk);
+  return vmk;
 }

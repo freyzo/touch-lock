@@ -14,7 +14,8 @@ import { resolve, basename, join, delimiter, sep } from "path";
 import { fileURLToPath } from "url";
 import chalk from "chalk";
 import { addEntry, getEntry, removeEntry, canonicalPath } from "./config.js";
-import { authenticate, ensureFirstRunSetup } from "./auth.js";
+import { authenticate } from "./auth.js";
+import { BIN } from "./bins.js";
 import { printKvBox } from "./tui.js";
 
 const ORIGINAL_BINARY_SUFFIX = ".tlock-original";
@@ -50,7 +51,7 @@ function resolveAppPath(appNameOrPath) {
 
 function readPlistKey(plistPath, key) {
   try {
-    return execFileSync("plutil", ["-extract", key, "raw", "-o", "-", plistPath], {
+    return execFileSync(BIN.plutil, ["-extract", key, "raw", "-o", "-", plistPath], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -118,13 +119,13 @@ function buildWrapperScript(originalBinaryPath) {
     `ORIGINAL_BINARY=${shellQuote(originalBinaryPath)}`,
     "",
     `if [ ! -x "$NODE_BIN" ] || [ ! -f "$TLOCK_JS" ]; then`,
-    `  osascript -e 'display dialog "tlock could not start: Node.js or tlock has moved. Reinstall tlock, then run tlock on this app again to repair it." buttons {"OK"} default button "OK" with icon stop with title "tlock"'`,
+    `  ${BIN.osascript} -e 'display dialog "tlock could not start: Node.js or tlock has moved. Reinstall tlock, then run tlock on this app again to repair it." buttons {"OK"} default button "OK" with icon stop with title "tlock"'`,
     `  exit 1`,
     `fi`,
     `if "$NODE_BIN" "$TLOCK_JS" auth-gate; then`,
     `  exec "$ORIGINAL_BINARY" "$@"`,
     `fi`,
-    `osascript -e 'display dialog "Authentication failed. The app is locked by tlock." buttons {"OK"} default button "OK" with icon stop with title "tlock"'`,
+    `${BIN.osascript} -e 'display dialog "Authentication failed. The app is locked by tlock." buttons {"OK"} default button "OK" with icon stop with title "tlock"'`,
     `exit 1`,
     "",
   ].join("\n");
@@ -238,8 +239,7 @@ export async function lockApp(appNameOrPath) {
     removeEntry(appPath);
   }
 
-  await ensureFirstRunSetup();
-  await authenticate();
+  await authenticate(`lock “${basename(appPath)}”`);
 
   addEntry({ target: appPath, type: "app", executableName });
   console.log(
@@ -281,7 +281,7 @@ export function unlockApp(entry) {
     [chalk.dim("App"), chalk.green(basename(appPath))],
     [chalk.dim("Note"), chalk.dim("Authenticate in the tlock prompt.")],
   ]);
-  execFileSync("open", ["-a", appPath], { stdio: "ignore" });
+  execFileSync(BIN.open, ["-a", appPath], { stdio: "ignore" });
 }
 
 /**
@@ -307,7 +307,7 @@ export async function removeApp(entry, { force = false } = {}) {
     return;
   }
 
-  await authenticate();
+  await authenticate(`remove the lock on “${basename(appPath)}”`);
 
   console.log(chalk.dim("Restoring original binary..."));
   renameSync(renamedBinaryPath, binaryPath);

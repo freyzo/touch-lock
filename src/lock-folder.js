@@ -23,7 +23,10 @@ import {
   ensureStorageDir,
   TLOCK_STORAGE_DIR,
 } from "./config.js";
-import { authenticate, getKeychainPassword, ensureFirstRunSetup } from "./auth.js";
+import { authenticate, getLegacyPassword } from "./auth.js";
+import { imageKeyPath, writeImageKey, readImageKey } from "./vault.js";
+import { wipeTree, destroyFile, resetQuickLookCache, flushMetadata } from "./shred.js";
+import { BIN } from "./bins.js";
 import { printKvBox } from "./tui.js";
 
 // Sparse image: only the space actually used is stored on disk.
@@ -90,12 +93,17 @@ function sanitizeVolumeName(name) {
   return sanitized || "tlock-volume";
 }
 
-function requirePassword() {
-  const password = getKeychainPassword();
-  if (!password) {
-    throw new Error("Could not read the tlock master password from Keychain.");
+/**
+ * The image's own random key, or the old Keychain password for a lock not yet re-keyed.
+ */
+function imagePassphrase(entry, vmk) {
+  const keyPath = imageKeyPath(entry.dmgPath);
+  if (existsSync(keyPath)) return readImageKey(keyPath, vmk);
+  const legacyPassword = getLegacyPassword();
+  if (legacyPassword === null) {
+    throw new Error(`Key file missing: ${keyPath}\n  Without it the image cannot be opened. If you moved it, put it back.`);
   }
-  return password;
+  return legacyPassword;
 }
 
 function commandError(error) {
@@ -107,7 +115,7 @@ function commandError(error) {
  */
 function runHdiutil(args, password) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const hdiutilProcess = spawn("hdiutil", args, { stdio: ["pipe", "ignore", "pipe"] });
+    const hdiutilProcess = spawn(BIN.hdiutil, args, { stdio: ["pipe", "ignore", "pipe"] });
 
     let stderrOutput = "";
     hdiutilProcess.stderr.on("data", (chunk) => {
@@ -143,7 +151,7 @@ function attachImage(imagePath, mountPoint, password, { browse = false, readonly
  */
 function detach(mountPoint, { force = false } = {}) {
   try {
-    execFileSync("hdiutil", ["detach", mountPoint, ...(force ? ["-force"] : [])], {
+    execFileSync(BIN.hdiutil, ["detach", mountPoint, ...(force ? ["-force"] : [])], {
       stdio: ["ignore", "ignore", "pipe"],
     });
   } catch (error) {
@@ -176,7 +184,7 @@ function copyOutOfVolume(volumePath, destination) {
   for (const name of readdirSync(volumePath)) {
     if (VOLUME_METADATA.has(name)) continue;
     try {
-      execFileSync("ditto", [join(volumePath, name), join(destination, name)], {
+      execFileSync(BIN.ditto, [join(volumePath, name), join(destination, name)], {
         stdio: ["ignore", "ignore", "pipe"],
       });
     } catch (error) {
@@ -206,7 +214,7 @@ async function createEncryptedImage(folderPath, imagePath, password) {
     await attachImage(imagePath, mountPoint, password);
     let copyError = null;
     try {
-      execFileSync("ditto", [folderPath, mountPoint], { stdio: ["ignore", "ignore", "pipe"] });
+      execFileSync(BIN.ditto, [folderPath, mountPoint], { stdio: ["ignore", "ignore", "pipe"] });
     } catch (error) {
       copyError = new Error(`Copying into the encrypted volume failed: ${commandError(error)}`);
     }
@@ -271,9 +279,9 @@ export async function lockFolder(folderPath) {
     );
   }
 
-  await ensureFirstRunSetup();
-  await authenticate();
-  const password = requirePassword();
+  const vmk = await authenticate(`lock “${basename(absolutePath)}”`);
+  const keyPath = imageKeyPath(imagePath);
+  const password = writeImageKey(keyPath, vmk);
 
   const spinner = ora({
     text: chalk.dim(`Encrypting ${basename(absolutePath)}...`),
@@ -282,6 +290,9 @@ export async function lockFolder(folderPath) {
   }).start();
   try {
     await createEncryptedImage(absolutePath, imagePath, password);
+  } catch (error) {
+    rmSync(keyPath, { force: true });
+    throw error;
   } finally {
     spinner.stop();
   }
@@ -293,12 +304,13 @@ export async function lockFolder(folderPath) {
     addEntry({ target: absolutePath, type: "folder", dmgPath: imagePath });
   } catch (error) {
     rmSync(imagePath, { force: true });
+    rmSync(keyPath, { force: true });
     throw error;
   }
 
-  const rmSpinner = ora({ text: chalk.dim("Removing original folder..."), color: "yellow", spinner: "dots" }).start();
+  const rmSpinner = ora({ text: chalk.dim("Wiping original folder..."), color: "yellow", spinner: "dots" }).start();
   try {
-    rmSync(absolutePath, { recursive: true, force: true });
+    wipeTree(absolutePath);
   } catch (error) {
     throw new Error(
       `Your data is encrypted and registered, but the original folder could not be fully deleted (${error.message}). Delete what is left of ${absolutePath} by hand.`
@@ -306,7 +318,8 @@ export async function lockFolder(folderPath) {
   } finally {
     rmSpinner.stop();
   }
-  console.log(chalk.dim("  Original folder removed"));
+  resetQuickLookCache();
+  console.log(chalk.dim("  Original folder overwritten and removed"));
 
   console.log();
   printKvBox("LOCKED FOLDER", [
@@ -329,8 +342,8 @@ export async function unlockFolder(entry) {
     return;
   }
 
-  await authenticate();
-  const password = requirePassword();
+  const vmk = await authenticate(`unlock “${basename(absolutePath)}”`);
+  const password = imagePassphrase(entry, vmk);
 
   const spinner = ora({ text: chalk.dim("Mounting encrypted volume..."), color: "yellow", spinner: "dots" }).start();
   try {
@@ -366,12 +379,13 @@ export async function removeFolder(entry, { force = false } = {}) {
       );
     }
     removeEntry(absolutePath);
+    rmSync(imageKeyPath(entry.dmgPath), { force: true });
     console.log(chalk.dim(`Forgot the lock for ${absolutePath}.`));
     return;
   }
 
-  await authenticate();
-  const password = requirePassword();
+  const vmk = await authenticate(`remove the lock on “${basename(absolutePath)}”`);
+  const password = imagePassphrase(entry, vmk);
 
   // A volume left open by `tlock unlock` must be ejected before the image can be attached again.
   if (isMountPoint(absolutePath)) detach(absolutePath);
@@ -400,8 +414,38 @@ export async function removeFolder(entry, { force = false } = {}) {
   console.log(chalk.green("  Contents restored"));
 
   rmSync(entry.dmgPath, { force: true });
+  destroyFile(imageKeyPath(entry.dmgPath));
   removeEntry(absolutePath);
 
   console.log();
   printKvBox("RESTORED", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
+}
+
+/**
+ * Destroy a folder lock for good (like lok -s): erase the image's keys, wipe the key file, delete the image.
+ */
+export async function shredFolder(entry) {
+  const absolutePath = entry.target;
+  await authenticate(`permanently destroy “${basename(absolutePath)}”`);
+
+  if (isMountPoint(absolutePath)) detach(absolutePath);
+  removeEmptyDir(absolutePath);
+
+  if (existsSync(entry.dmgPath)) {
+    try {
+      execFileSync(BIN.hdiutil, ["erasekeys", entry.dmgPath], { stdio: ["ignore", "ignore", "pipe"] });
+    } catch (error) {
+      console.log(chalk.yellow(`  Could not erase the image's keys (${commandError(error)}); deleting it anyway.`));
+    }
+  }
+  destroyFile(imageKeyPath(entry.dmgPath));
+  rmSync(entry.dmgPath, { force: true });
+  removeEntry(absolutePath);
+  flushMetadata(absolutePath);
+
+  console.log();
+  printKvBox("SHREDDED", [
+    [chalk.dim("Path"), chalk.red(absolutePath)],
+    [chalk.dim("Note"), chalk.dim("Image keys erased, key file overwritten, image deleted.")],
+  ]);
 }

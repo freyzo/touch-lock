@@ -7,7 +7,7 @@ import { platform } from "os";
 import { readFileSync, existsSync, statSync } from "fs";
 import { fileURLToPath } from "url";
 import { basename, dirname, join, resolve } from "path";
-import { lockFolder, unlockFolder, removeFolder } from "../src/lock-folder.js";
+import { lockFolder, unlockFolder, removeFolder, shredFolder } from "../src/lock-folder.js";
 import { lockApp, unlockApp, removeApp } from "../src/lock-app.js";
 import { authenticate } from "../src/auth.js";
 import { getLockRegistry, getEntry, canonicalPath } from "../src/config.js";
@@ -178,6 +178,17 @@ async function runRemove(target, { force = false } = {}) {
   }
 }
 
+async function runShred(target) {
+  const entry = findEntryForTarget(target, "shred");
+  if (!entry) {
+    throw new Error(`No lock found for: ${target}. shred only destroys folders locked by tlock.`);
+  }
+  if (entry.type !== "folder") {
+    throw new Error(`shred works on locked folders only. To unlock an app for good: tlock remove ${entry.target}`);
+  }
+  await shredFolder(entry);
+}
+
 /**
  * Wrap an async action with consistent error handling.
  */
@@ -220,7 +231,8 @@ program
   .description(chalk.dim("Lock folders and apps with Touch ID on macOS"))
   .version(VERSION)
   .option("-u, --unlock <target>", "Unlock a locked folder/app")
-  .option("-r, --remove <target>", "Permanently remove lock and restore target");
+  .option("-r, --remove <target>", "Permanently remove lock and restore target")
+  .option("-s, --shred <target>", "Destroy a locked folder for good (no restore)");
 
 // Default command: lock a target
 program
@@ -228,8 +240,8 @@ program
   .action(
     withErrorHandling(async (target) => {
       const options = program.opts();
-      if (options.unlock && options.remove) {
-        throw new Error("Use either --unlock/-u or --remove/-r, not both.");
+      if ([options.unlock, options.remove, options.shred].filter(Boolean).length > 1) {
+        throw new Error("Use only one of --unlock/-u, --remove/-r, --shred/-s.");
       }
       if (options.unlock) {
         await runUnlock(options.unlock);
@@ -237,6 +249,10 @@ program
       }
       if (options.remove) {
         await runRemove(options.remove);
+        return;
+      }
+      if (options.shred) {
+        await runShred(options.shred);
         return;
       }
 
@@ -286,6 +302,12 @@ program
   .option("-f, --force", "Forget the lock even when there is nothing to restore (image or app binary missing)")
   .action(withErrorHandling((target, options) => runRemove(target, options)));
 
+// shred
+program
+  .command("shred <target>")
+  .description("Destroy a locked folder for good: erase its keys and delete the image (no restore)")
+  .action(withErrorHandling((target) => runShred(target)));
+
 // status
 program
   .command("status [target]")
@@ -319,7 +341,7 @@ program
     // Fail closed: only the explicit success below may exit 0.
     process.exitCode = 1;
     try {
-      await authenticate();
+      await authenticate("open a locked app");
       process.exit(0);
     } catch {
       process.exit(1);
