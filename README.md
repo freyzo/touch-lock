@@ -45,7 +45,10 @@ The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). 
 | First-time lock folder | `tlock /path/to/folder` |
 | First-time lock app | `tlock Slack` or `tlock /Applications/Slack.app` |
 | Open locked folder | `tlock unlock /path` or `tlock -u /path` |
+| Open it for a limited time | `tlock unlock /path --for 30m` |
 | Put an unlocked folder away again | `tlock /path` (or eject it in Finder) |
+| Lock every unlocked folder now | `tlock --all` or `tlock -a` |
+| Choose when folders lock themselves | `tlock autolock` |
 | Stop using tlock on folder (restore normal folder) | `tlock remove /path` or `tlock -r /path` |
 | Destroy a locked folder for good (no restore) | `tlock shred /path` or `tlock -s /path` |
 | Forget a lock whose image or app is gone | `tlock remove --force /path` |
@@ -88,7 +91,7 @@ tlock [target]
 
 **Upgrading from 0.1.x:** after you create the recovery passphrase, existing folder locks are re-keyed automatically and the old master password is deleted from Keychain.
 
-A folder named like a subcommand (`list`, `status`, `unlock`, `remove`) must be passed as a path, e.g. `tlock ./list`.
+A folder named like a subcommand (`list`, `status`, `unlock`, `remove`, `shred`, `autolock`) must be passed as a path, e.g. `tlock ./list`.
 
 ### Unlock / remove / shred (long or short)
 
@@ -100,9 +103,22 @@ tlock shred <target>      # or:  tlock -s <target>
 
 | Command | Description |
 | --- | --- |
-| `unlock` / `-u` | Folder: authenticate, then mount its image at the original path. App: open it; its wrapper asks for Touch ID / password. |
+| `unlock` / `-u` | Folder: authenticate, then mount its image at the original path. `--for 30m` locks it again after that long. App: open it; its wrapper asks for Touch ID / password. |
 | `remove` / `-r` | Authenticate, restore normal folder or app binary, delete the image / wrapper. `--force` forgets a lock whose image or app binary is missing. |
 | `shred` / `-s` | Folder only. Authenticate, eject if open, erase the image's keys (`hdiutil erasekeys`), overwrite the key file, delete the image, and clear Quick Look thumbnails, Recents and the parent's `.DS_Store`. Nothing is restored. |
+
+### Lock everything / auto-lock
+
+```bash
+tlock --all                        # or: tlock -a — lock every unlocked folder now
+tlock unlock <folder> --for 30m    # lock again after 30 minutes (also 90s, 2h)
+tlock autolock                     # show settings
+tlock autolock --idle 15m          # lock after 15 min without keyboard/mouse input (or: off)
+tlock autolock --screen-lock on    # lock when the screen locks or another user switches in
+tlock autolock --sleep on          # lock when the Mac sleeps
+```
+
+Defaults: screen lock **on**, sleep **on**, idle **15 min**. While a folder is unlocked, a small background process (`tlock autolock-watch`) checks every 5 seconds and exits once nothing is unlocked. It never force-ejects: if files on the volume are in use, it shows a notification once and retries. `tlock --all` does the same and lists any folder it could not lock.
 
 ### Other commands
 
@@ -136,10 +152,10 @@ tlock -r ~/Documents/private-notes
 
 1. `tlock unlock ~/path` (or `tlock -u ~/path`) — use files.
 2. Add/change files while unlocked; the volume is writable and grows as needed.
-3. `tlock ~/path` when finished (or eject the volume in Finder) — path disappears; data stays in `~/.tlock/*.sparseimage`.
+3. `tlock ~/path` or `tlock --all` when finished (or eject the volume in Finder) — path disappears; data stays in `~/.tlock/*.sparsebundle`. Forget, and auto-lock does it on screen lock, sleep, or idle.
 4. Next time: `tlock unlock` again.
 
-Locks made by older tlock versions (`~/.tlock/*.dmg`) open read-only. To make one writable: `tlock remove ~/path`, then `tlock ~/path`.
+Locks made by older tlock versions (`~/.tlock/*.dmg`) open read-only. To make one writable: `tlock remove ~/path`, then `tlock ~/path`. Locks stored as a single `*.sparseimage` keep working; the same remove-and-lock-again moves one to the backup-friendly sparse bundle format.
 
 ---
 
@@ -165,10 +181,10 @@ Checks: lock succeeds → **path gone** while locked → unlock → file content
 
 ### Folders
 
-1. `hdiutil` creates an AES-256 encrypted, writable APFS sparse image (`~/.tlock/<name>-<hash>.sparseimage`, only used space is stored) with its own random key, and `ditto` copies the folder in.
+1. `hdiutil` creates an AES-256 encrypted, writable APFS sparse bundle (`~/.tlock/<name>-<hash>.sparsebundle`) with its own random key, and `ditto` copies the folder in. Only used space is stored, in 8 MB pieces, so Time Machine backs up just the pieces that changed.
 2. The lock is registered, then every file in the original folder is overwritten with random bytes and the folder is removed.
 3. `tlock unlock` attaches the image at the original path.
-4. `tlock <path>` (or eject in Finder) puts it away; the encrypted image stays under `~/.tlock/`.
+4. `tlock <path>`, `tlock --all`, auto-lock, or eject in Finder puts it away; the encrypted image stays under `~/.tlock/`.
 
 tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, and folders inside or containing another locked folder.
 
@@ -192,11 +208,12 @@ tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, 
 
 | Item | Location |
 | --- | --- |
-| Lock registry | `~/.tlock/config.json` |
-| Encrypted images | `~/.tlock/*.sparseimage` (older locks: `*.dmg`) |
-| Per-image keys (sealed) | `~/.tlock/*.sparseimage.key` — keep next to the image |
+| Lock registry and auto-lock settings | `~/.tlock/config.json` |
+| Encrypted images | `~/.tlock/*.sparsebundle` (older locks: `*.sparseimage`, `*.dmg`) |
+| Per-image keys (sealed) | `~/.tlock/*.sparsebundle.key` — keep next to the image |
 | Vault (sealed vault key, no passphrase) | `~/.tlock/vault.json` — rebuilt from the recovery passphrase if lost |
 | Touch ID helper | `~/.tlock/helper-<hash>/tlock.app` |
+| Auto-lock watcher | `~/.tlock/autolock.pid` (while a folder is unlocked) |
 | Failed password attempts | `~/.tlock/.auth-failures` |
 | Registry write lock | `~/.tlock/config.lock` (transient) |
 | Temporary mount points | `~/.tlock/mount-*` (transient) |
@@ -219,7 +236,7 @@ tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, 
 
 - Folder images use native AES-256 encryption (`hdiutil`) with a random key per image; nothing usable is stored in Keychain.
 - **Someone at your unlocked Mac with a terminal** cannot open a locked folder without your finger, your Mac login password, or the recovery passphrase.
-- **Not covered:** malware running as you can read a folder *while it is unlocked*, or tamper with tlock and capture a key the next time you authenticate. Only a separate macOS account plus FileVault protects against that.
+- **Not covered:** malware running as you can read a folder *while it is unlocked* (auto-lock keeps that window short), or tamper with tlock and capture a key the next time you authenticate. Only a separate macOS account plus FileVault protects against that.
 - **Copies made before locking** (Time Machine, APFS local snapshots, iCloud / Dropbox versions) still hold the plain folder. Overwriting files before deletion is best effort on SSDs and APFS. Turn on FileVault.
 - **App wrapper** is a deterrent, not a barrier: the real binary stays runnable (`Contents/MacOS/<name>.tlock-original`) and the app's data in `~/Library` is not encrypted.
 - **Shred** erases the image's keys and the key file, but copies of `~/.tlock` in backups can still be opened with your recovery passphrase.
