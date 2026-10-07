@@ -140,9 +140,9 @@ function runHdiutil(args, password) {
   });
 }
 
-function attachImage(imagePath, mountPoint, password, { browse = false, readonly = false } = {}) {
-  const args = ["attach", imagePath, "-stdinpass", "-mountpoint", mountPoint];
-  if (!browse) args.push("-nobrowse");
+// -nobrowse keeps the volume off the Desktop and Finder sidebar; it is still reachable at its path.
+function attachImage(imagePath, mountPoint, password, { readonly = false } = {}) {
+  const args = ["attach", imagePath, "-stdinpass", "-mountpoint", mountPoint, "-nobrowse"];
   if (readonly) args.push("-readonly");
   return runHdiutil(args, password);
 }
@@ -375,7 +375,7 @@ export async function unlockFolder(entry, { autoLockAt } = {}) {
 
   const spinner = ora({ text: chalk.dim("Mounting encrypted volume..."), color: "yellow", spinner: "dots" }).start();
   try {
-    await attachImage(entry.dmgPath, absolutePath, password, { browse: true });
+    await attachImage(entry.dmgPath, absolutePath, password);
   } finally {
     spinner.stop();
   }
@@ -390,7 +390,7 @@ export async function unlockFolder(entry, { autoLockAt } = {}) {
     ));
   }
   console.log(chalk.dim(
-    `  When done, lock it again with \`tlock ${absolutePath}\` or \`tlock --all\` (or eject it in Finder). To get a normal folder back: \`tlock remove ${absolutePath}\`.`
+    `  When done, lock it again with \`tlock ${absolutePath}\` or \`tlock --all\`. To get a normal folder back: \`tlock remove ${absolutePath}\`.`
   ));
 }
 

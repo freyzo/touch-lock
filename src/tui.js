@@ -10,9 +10,6 @@ const B = {
   v: "│",
   lj: "├",
   rj: "┤",
-  tm: "┬",
-  bm: "┴",
-  mm: "┼",
 };
 const INDENT = "  ";
 
@@ -94,14 +91,18 @@ function boxLine(indent, border, inner) {
 }
 
 /**
- * Key/value panel. Width follows the terminal; long values wrap inside the box.
+ * Key/value panel, as wide as its content (up to the terminal); long values wrap inside the box.
  */
 export function printKvBox(title, rows) {
   const indent = "  ";
   const border = chalk.green;
   const titleStyle = chalk.cyan;
   const cols = terminalColumns();
-  const innerW = Math.max(8, cols - indent.length - 4);
+  // One spare column so a slightly narrower window does not re-wrap the box.
+  const maxInner = Math.max(8, cols - indent.length - 5);
+  const naturalLabelW = Math.max(4, ...rows.map(([a]) => vlen(a)));
+  const contentW = Math.max(vlen(title), ...rows.map(([, value]) => naturalLabelW + 2 + vlen(value)));
+  const innerW = Math.min(maxInner, contentW);
 
   const labelW = Math.min(
     Math.max(4, ...rows.map(([a]) => vlen(a))),
@@ -168,13 +169,14 @@ export function clockTime(epochMs) {
 }
 
 const sum = (values) => values.reduce((total, value) => total + value, 0);
+const GAP = "   ";
 
 /**
  * Column widths that fit the terminal, or null if the columns' `min` widths do not.
  * Space above the minimums is shared in proportion to how much each column still needs.
  */
 function fitColumns(columns, rows, width) {
-  const budget = width - INDENT.length - (3 * columns.length + 1);
+  const budget = width - INDENT.length - GAP.length * (columns.length - 1) - 1;
   const natural = columns.map((column, i) =>
     Math.max(column.header.length, ...rows.map((row) => row[i].text.length))
   );
@@ -203,61 +205,57 @@ function titleLines(title, inner) {
   return vlen(joined) <= inner ? [joined] : parts;
 }
 
-function drawGrid(title, columns, rows, widths) {
-  const border = chalk.green;
-  const inner = sum(widths.map((w) => w + 3)) - 1;
-  const rule = (left, middle, right) => INDENT + border(left + widths.map((w) => hr(w + 2)).join(middle) + right);
+const paint = (cell, text) => (cell.style ? cell.style(text) : text);
+
+function drawColumns(title, columns, rows, widths, width) {
   const rowLines = (cells) => {
-    const wrapped = cells.map((cell, i) =>
-      wrapPlain(cell.text, widths[i]).map((line) => (cell.style ? cell.style(line) : line))
-    );
+    const wrapped = cells.map((cell, i) => wrapPlain(cell.text, widths[i]).map((text) => paint(cell, text)));
     const height = Math.max(...wrapped.map((lines) => lines.length));
     return Array.from({ length: height }, (_, k) =>
-      INDENT + border(B.v) +
-      wrapped.map((lines, i) => ` ${fitVisible(lines[k] ?? "", widths[i])} `).join(border(B.v)) +
-      border(B.v)
+      (INDENT + wrapped.map((lines, i) => fitVisible(lines[k] ?? "", widths[i])).join(GAP)).trimEnd()
     );
   };
 
+  const tableWidth = sum(widths) + GAP.length * (widths.length - 1);
   const bodies = rows.map(rowLines);
-  const separateRows = bodies.some((lines) => lines.length > 1);
+  const spaced = bodies.some((lines) => lines.length > 1);
   const out = [
-    INDENT + border(B.tl + hr(inner) + B.tr),
-    ...titleLines(title, inner - 2).map((text) => boxLine(INDENT, border, fitVisible(text, inner - 2))),
-    rule(B.lj, B.tm, B.rj),
-    ...rowLines(columns.map((column) => ({ text: column.header, style: chalk.dim }))),
-    rule(B.lj, B.mm, B.rj),
+    ...titleLines(title, width - INDENT.length - 1).map((text) => INDENT + text),
+    "",
+    ...rowLines(columns.map((column) => ({ text: column.header.toUpperCase(), style: chalk.dim }))),
+    INDENT + chalk.dim(hr(tableWidth)),
   ];
   bodies.forEach((lines, i) => {
+    if (spaced && i > 0) out.push("");
     out.push(...lines);
-    if (separateRows && i < bodies.length - 1) out.push(rule(B.lj, B.mm, B.rj));
   });
-  out.push(rule(B.bl, B.bm, B.br));
   return out.join("\n");
 }
 
-/** One cell per line, for terminals too narrow for columns. */
+/** One block per row for narrow terminals: first two cells on one line if they fit, the rest below. */
 function drawStacked(title, rows, width) {
-  const border = chalk.green;
-  const inner = Math.max(8, width - INDENT.length - 4);
-  const line = (text) => boxLine(INDENT, border, fitVisible(text, inner));
-  const rule = (left, right) => INDENT + border(left + hr(inner + 2) + right);
-  const out = [rule(B.tl, B.tr), ...titleLines(title, inner).map(line), rule(B.lj, B.rj)];
-  rows.forEach((cells, i) => {
-    for (const cell of cells) {
-      if (!cell.text) continue;
-      out.push(...wrapPlain(cell.text, inner).map((text) => line(cell.style ? cell.style(text) : text)));
+  const inner = Math.max(10, width - INDENT.length - 1);
+  const out = titleLines(title, inner).map((text) => INDENT + text);
+  for (const row of rows) {
+    const [first, ...rest] = row.filter((cell) => cell.text);
+    out.push("");
+    if (rest.length > 0 && first.text.length + 2 + rest[0].text.length <= inner) {
+      out.push(`${INDENT}${paint(first, first.text)}  ${paint(rest[0], rest[0].text)}`);
+      rest.shift();
+    } else {
+      out.push(...wrapPlain(first.text, inner).map((text) => INDENT + paint(first, text)));
     }
-    if (i < rows.length - 1) out.push(rule(B.lj, B.rj));
-  });
-  out.push(rule(B.bl, B.br));
+    for (const cell of rest) {
+      out.push(...wrapPlain(cell.text, inner - 2).map((text) => `${INDENT}  ${paint(cell, text)}`));
+    }
+  }
   return out.join("\n");
 }
 
 /**
- * Bordered table sized to the current terminal width. Cells wrap at word and path boundaries;
- * when space runs out, columns with a `drop` rank go first (highest first), and below that
- * each row is stacked one cell per line.
+ * Borderless table sized to the terminal at print time; with no box to break, it also survives
+ * the window being resized afterwards. Cells wrap at word and path boundaries; when space runs out,
+ * columns with a `drop` rank go first (highest first), and below that each row becomes a block.
  * title: string or [title, detail]; columns: [{ header, min, drop? }]; rows: [[{ text, style? }]].
  */
 export function renderTable(title, columns, rows) {
@@ -268,7 +266,7 @@ export function renderTable(title, columns, rows) {
     const shownColumns = pick(columns);
     const shownRows = rows.map(pick);
     const widths = fitColumns(shownColumns, shownRows, width);
-    if (widths) return drawGrid(title, shownColumns, shownRows, widths);
+    if (widths) return drawColumns(title, shownColumns, shownRows, widths, width);
 
     const droppable = active.filter((i) => columns[i].drop).sort((a, b) => columns[b].drop - columns[a].drop);
     if (droppable.length === 0) return drawStacked(title, rows, width);
@@ -297,7 +295,7 @@ export function printLockedTargets(entries, formatDate, stateOf) {
   const rows = entries.map((entry) => {
     const state = stateOf(entry);
     return [
-      { text: basename(entry.target), style: chalk.bold },
+      { text: basename(entry.target) },
       { text: state.label, style: TONES[state.tone] },
       { text: displayPath(entry.target) },
       { text: formatDate(entry.createdAt), style: chalk.dim },

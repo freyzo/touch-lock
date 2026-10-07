@@ -46,7 +46,7 @@ The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). 
 | First-time lock app | `tlock Slack` or `tlock /Applications/Slack.app` |
 | Open locked folder | `tlock unlock /path` or `tlock -u /path` |
 | Open it for a limited time | `tlock unlock /path --for 30m` |
-| Put an unlocked folder away again | `tlock /path` (or eject it in Finder) |
+| Put an unlocked folder away again | `tlock /path` |
 | Lock every unlocked folder now | `tlock --all` or `tlock -a` |
 | Choose when folders lock themselves | `tlock autolock` |
 | Stop using tlock on folder (restore normal folder) | `tlock remove /path` or `tlock -r /path` |
@@ -154,7 +154,7 @@ tlock -r ~/Documents/private-notes
 
 1. `tlock unlock ~/path` (or `tlock -u ~/path`) — use files.
 2. Add/change files while unlocked; the volume is writable and grows as needed.
-3. `tlock ~/path` or `tlock --all` when finished (or eject the volume in Finder) — path disappears; data stays in `~/.tlock/*.sparsebundle`. Forget, and auto-lock does it on screen lock, sleep, or idle.
+3. `tlock ~/path` or `tlock --all` when finished — path disappears; data stays in `~/.tlock/*.sparsebundle`. Forget, and auto-lock does it on screen lock, sleep, or idle.
 4. Next time: `tlock unlock` again.
 
 Locks made by older tlock versions (`~/.tlock/*.dmg`) open read-only. To make one writable: `tlock remove ~/path`, then `tlock ~/path`. Locks stored as a single `*.sparseimage` keep working; the same remove-and-lock-again moves one to the backup-friendly sparse bundle format.
@@ -185,8 +185,8 @@ Checks: lock succeeds → **path gone** while locked → unlock → file content
 
 1. `hdiutil` creates an AES-256 encrypted, writable APFS sparse bundle (`~/.tlock/<name>-<hash>.sparsebundle`) with its own random key, and `ditto` copies the folder in. Only used space is stored, in 8 MB pieces, so Time Machine backs up just the pieces that changed.
 2. The lock is registered, then every file in the original folder is overwritten with random bytes and the folder is removed.
-3. `tlock unlock` attaches the image at the original path.
-4. `tlock <path>`, `tlock --all`, auto-lock, or eject in Finder puts it away; the encrypted image stays under `~/.tlock/`.
+3. `tlock unlock` attaches the image at the original path, hidden from the Desktop and Finder sidebar (`-nobrowse`); the folder opens normally from its own location.
+4. `tlock <path>`, `tlock --all`, or auto-lock puts it away; the encrypted image stays under `~/.tlock/`.
 
 tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, and folders inside or containing another locked folder.
 

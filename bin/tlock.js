@@ -2,7 +2,6 @@
 
 import { Command } from "commander";
 import chalk from "chalk";
-import figlet from "figlet";
 import { platform } from "os";
 import { readFileSync, existsSync, statSync } from "fs";
 import { fileURLToPath } from "url";
@@ -53,10 +52,45 @@ function shouldShowBanner() {
   return argv.length === 0 || argv.includes("--help") || argv.includes("-h");
 }
 
+// Letters from the figlet "ANSI Shadow" font, built in so the banner needs no dependency.
+const ANSI_SHADOW = {
+  t: [
+    "████████╗",
+    "╚══██╔══╝",
+    "   ██║   ",
+    "   ██║   ",
+    "   ██║   ",
+    "   ╚═╝   ",
+  ],
+  l: [
+    "██╗     ",
+    "██║     ",
+    "██║     ",
+    "██║     ",
+    "███████╗",
+    "╚══════╝",
+  ],
+  c: [
+    " ██████╗",
+    "██╔════╝",
+    "██║     ",
+    "██║     ",
+    "╚██████╗",
+    " ╚═════╝",
+  ],
+  k: [
+    "██╗  ██╗",
+    "██║ ██╔╝",
+    "█████╔╝ ",
+    "██╔═██╗ ",
+    "██║  ██╗",
+    "╚═╝  ╚═╝",
+  ],
+};
+
 function printBanner() {
   try {
-    const font = "ANSI Shadow";
-    const rc   = (ch) => figlet.textSync(ch, { font }).split("\n").slice(0, -1);
+    const rc = (ch) => [...ANSI_SHADOW[ch]];
 
     // Fingerprint whorl — 9 wide × 7 tall, matches ANSI Shadow O dimensions
     const fingerprintO = [
@@ -93,7 +127,7 @@ function printBanner() {
     const width       = Math.max(rawWidth, subtitleRaw.length) + 2;
     const dash        = blue("─");
 
-    // Figlet art is ~45 columns; skip it rather than wrap and look broken.
+    // Banner art is ~45 columns; skip it rather than wrap and look broken.
     if (width + 4 > terminalColumns()) {
       console.log(`\n  tlock  ${blue("v" + VERSION)}\n`);
       return;
@@ -108,7 +142,7 @@ function printBanner() {
     console.log("  " + blue("└") + dash.repeat(width) + blue("┘"));
     console.log("");
   } catch {
-    // The banner is decorative; never let a figlet error block the CLI.
+    // The banner is decorative; never let it block the CLI.
   }
 }
 
