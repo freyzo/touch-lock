@@ -19,6 +19,7 @@ import {
   getEntry,
   getLockRegistry,
   removeEntry,
+  updateEntry,
   canonicalPath,
   ensureStorageDir,
   TLOCK_STORAGE_DIR,
@@ -29,7 +30,7 @@ import { wipeTree, destroyFile, resetQuickLookCache, flushMetadata } from "./shr
 import { BIN } from "./bins.js";
 import { printKvBox } from "./tui.js";
 
-// Sparse image: only the space actually used is stored on disk.
+// Sparse bundle: only used space is stored, in 8 MB bands that Time Machine backs up incrementally.
 const IMAGE_MAX_SIZE = "1t";
 const VOLUME_METADATA = new Set([
   ".fseventsd",
@@ -45,14 +46,14 @@ const STALE_MOUNT_DIR_MS = 60 * 60 * 1000;
  */
 function generateImagePath(folderPath) {
   const hash = createHash("sha256").update(folderPath).digest("hex").slice(0, 12);
-  return join(TLOCK_STORAGE_DIR, `${basename(folderPath)}-${hash}.sparseimage`);
+  return join(TLOCK_STORAGE_DIR, `${basename(folderPath)}-${hash}.sparsebundle`);
 }
 
 function isInside(child, parent) {
   return child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 }
 
-function isMountPoint(targetPath) {
+export function isMountPoint(targetPath) {
   try {
     return statSync(targetPath).dev !== statSync(dirname(targetPath)).dev;
   } catch {
@@ -194,14 +195,14 @@ function copyOutOfVolume(volumePath, destination) {
 }
 
 /**
- * Create an AES-256 encrypted, writable APFS sparse image and copy the folder into it.
+ * Create an AES-256 encrypted, writable APFS sparse bundle and copy the folder into it.
  */
 async function createEncryptedImage(folderPath, imagePath, password) {
   ensureStorageDir();
   await runHdiutil([
     "create",
     "-size", IMAGE_MAX_SIZE,
-    "-type", "SPARSE",
+    "-type", "SPARSEBUNDLE",
     "-fs", "APFS",
     "-encryption", "AES-256",
     "-stdinpass",
@@ -225,11 +226,37 @@ async function createEncryptedImage(folderPath, imagePath, password) {
     }
     if (copyError) throw copyError;
   } catch (error) {
-    rmSync(imagePath, { force: true });
+    rmSync(imagePath, { recursive: true, force: true });
     throw error;
   } finally {
     removeEmptyDir(mountPoint);
   }
+}
+
+/**
+ * Eject an unlocked folder's volume (refuses while files on it are in use) and clear its auto-lock timer.
+ */
+export function ejectFolder(entry) {
+  detach(entry.target);
+  removeEmptyDir(entry.target);
+  if (entry.autoLockAt) updateEntry(entry.target, { autoLockAt: undefined });
+}
+
+/**
+ * Eject every unlocked folder. Returns { locked: [paths], busy: [{ target, reason }] }.
+ */
+export function lockAllFolders() {
+  const result = { locked: [], busy: [] };
+  for (const entry of getLockRegistry()) {
+    if (entry.type !== "folder" || !isMountPoint(entry.target)) continue;
+    try {
+      ejectFolder(entry);
+      result.locked.push(entry.target);
+    } catch (error) {
+      result.busy.push({ target: entry.target, reason: error.message });
+    }
+  }
+  return result;
 }
 
 /**
@@ -239,8 +266,7 @@ function relockFolder(entry) {
   if (!isMountPoint(entry.target)) {
     throw new Error(`Already locked: ${entry.target}\n  Open it with: tlock unlock ${entry.target}`);
   }
-  detach(entry.target);
-  removeEmptyDir(entry.target);
+  ejectFolder(entry);
 
   console.log();
   printKvBox("LOCKED FOLDER", [
@@ -296,14 +322,14 @@ export async function lockFolder(folderPath) {
   } finally {
     spinner.stop();
   }
-  chmodSync(imagePath, 0o600);
+  chmodSync(imagePath, 0o700);
   console.log(chalk.green("  Encrypted volume created"));
 
   // Register before deleting anything, so the data is never unreachable through tlock.
   try {
     addEntry({ target: absolutePath, type: "folder", dmgPath: imagePath });
   } catch (error) {
-    rmSync(imagePath, { force: true });
+    rmSync(imagePath, { recursive: true, force: true });
     rmSync(keyPath, { force: true });
     throw error;
   }
@@ -330,14 +356,16 @@ export async function lockFolder(folderPath) {
 
 /**
  * Unlock a folder: authenticate, then mount its image at the original path.
+ * autoLockAt (epoch ms) sets a per-unlock timer for the auto-lock watcher.
  */
-export async function unlockFolder(entry) {
+export async function unlockFolder(entry, { autoLockAt } = {}) {
   const absolutePath = entry.target;
 
   if (!existsSync(entry.dmgPath)) {
     throw new Error(`Encrypted image missing: ${entry.dmgPath}`);
   }
   if (isMountPoint(absolutePath)) {
+    if (autoLockAt) updateEntry(absolutePath, { autoLockAt });
     console.log(chalk.dim(`Already unlocked: ${absolutePath}`));
     return;
   }
@@ -352,6 +380,7 @@ export async function unlockFolder(entry) {
     spinner.stop();
   }
   console.log(chalk.green("  Volume mounted"));
+  updateEntry(absolutePath, { autoLockAt });
 
   console.log();
   printKvBox("UNLOCKED FOLDER", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
@@ -361,7 +390,7 @@ export async function unlockFolder(entry) {
     ));
   }
   console.log(chalk.dim(
-    `  When done, lock it again with \`tlock ${absolutePath}\` (or eject it in Finder). To get a normal folder back: \`tlock remove ${absolutePath}\`.`
+    `  When done, lock it again with \`tlock ${absolutePath}\` or \`tlock --all\` (or eject it in Finder). To get a normal folder back: \`tlock remove ${absolutePath}\`.`
   ));
 }
 
@@ -413,7 +442,7 @@ export async function removeFolder(entry, { force = false } = {}) {
   }
   console.log(chalk.green("  Contents restored"));
 
-  rmSync(entry.dmgPath, { force: true });
+  rmSync(entry.dmgPath, { recursive: true, force: true });
   destroyFile(imageKeyPath(entry.dmgPath));
   removeEntry(absolutePath);
 
@@ -439,7 +468,7 @@ export async function shredFolder(entry) {
     }
   }
   destroyFile(imageKeyPath(entry.dmgPath));
-  rmSync(entry.dmgPath, { force: true });
+  rmSync(entry.dmgPath, { recursive: true, force: true });
   removeEntry(absolutePath);
   flushMetadata(absolutePath);
 

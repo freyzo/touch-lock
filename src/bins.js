@@ -13,4 +13,6 @@ export const BIN = {
   qlmanage: "/usr/bin/qlmanage",
   defaults: "/usr/bin/defaults",
   killall: "/usr/bin/killall",
+  ioreg: "/usr/sbin/ioreg",
+  ps: "/bin/ps",
 };

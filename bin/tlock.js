@@ -7,11 +7,13 @@ import { platform } from "os";
 import { readFileSync, existsSync, statSync } from "fs";
 import { fileURLToPath } from "url";
 import { basename, dirname, join, resolve } from "path";
-import { lockFolder, unlockFolder, removeFolder, shredFolder } from "../src/lock-folder.js";
+import { lockFolder, unlockFolder, removeFolder, shredFolder, lockAllFolders } from "../src/lock-folder.js";
 import { lockApp, unlockApp, removeApp } from "../src/lock-app.js";
 import { authenticate } from "../src/auth.js";
-import { getLockRegistry, getEntry, canonicalPath } from "../src/config.js";
+import { getLockRegistry, getEntry, canonicalPath, getSettings, updateSettings } from "../src/config.js";
+import { parseDuration, describeAutoLock, ensureWatcher, runWatcher } from "../src/autolock.js";
 import {
+  printKvBox,
   printLockedTargetsTable,
   printStatusSummary,
   printEntryStatus,
@@ -154,16 +156,62 @@ function detectTargetType(target) {
   return "unknown";
 }
 
-async function runUnlock(target) {
+async function runUnlock(target, forDuration) {
   const entry = findEntryForTarget(target, "unlock");
   if (!entry) {
     throw new Error(`No lock found for: ${target}`);
   }
-  if (entry.type === "folder") {
-    await unlockFolder(entry);
-  } else {
+  if (entry.type !== "folder") {
+    if (forDuration) throw new Error("--for only applies to folders.");
     unlockApp(entry);
+    return;
   }
+  const autoLockAt = forDuration ? Date.now() + parseDuration(forDuration) : undefined;
+  await unlockFolder(entry, { autoLockAt });
+  ensureWatcher({ hasTimer: Boolean(autoLockAt) });
+  console.log(chalk.dim(`  ${describeAutoLock(getSettings(), autoLockAt)} Change with \`tlock autolock\`.`));
+}
+
+function runLockAll() {
+  const { locked, busy } = lockAllFolders();
+  if (locked.length === 0 && busy.length === 0) {
+    console.log(chalk.dim("No unlocked folders."));
+    return;
+  }
+  for (const target of locked) console.log(chalk.green(`  Locked ${target}`));
+  for (const { target } of busy) {
+    console.log(chalk.yellow(`  In use, not locked: ${target} — close its files and run tlock --all again.`));
+  }
+  if (busy.length > 0) process.exitCode = 1;
+}
+
+function parseOnOff(value, flag) {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  throw new Error(`${flag} takes on or off.`);
+}
+
+function runAutolock(options) {
+  const patch = {};
+  if (options.idle !== undefined) {
+    patch.idleMinutes = options.idle === "off" ? 0 : parseDuration(options.idle) / 60_000;
+  }
+  if (options.sleep !== undefined) patch.lockOnSleep = parseOnOff(options.sleep, "--sleep");
+  if (options.screenLock !== undefined) patch.lockOnScreenLock = parseOnOff(options.screenLock, "--screen-lock");
+  if (Object.keys(patch).length > 0) {
+    updateSettings(patch);
+    ensureWatcher();
+  }
+
+  const settings = getSettings();
+  const onOff = (value) => (value ? chalk.green("on") : chalk.dim("off"));
+  console.log();
+  printKvBox("AUTO-LOCK", [
+    [chalk.dim("Screen lock"), onOff(settings.lockOnScreenLock)],
+    [chalk.dim("Sleep"), onOff(settings.lockOnSleep)],
+    [chalk.dim("Idle"), settings.idleMinutes > 0 ? chalk.green(`${settings.idleMinutes} min`) : chalk.dim("off")],
+  ]);
+  console.log(chalk.dim("  Applies to unlocked folders. Per unlock: tlock unlock <folder> --for 30m"));
 }
 
 async function runRemove(target, { force = false } = {}) {
@@ -231,6 +279,8 @@ program
   .description(chalk.dim("Lock folders and apps with Touch ID on macOS"))
   .version(VERSION)
   .option("-u, --unlock <target>", "Unlock a locked folder/app")
+  .option("--for <duration>", "With --unlock: lock the folder again after this long (e.g. 30m, 2h)")
+  .option("-a, --all", "Lock every unlocked folder now")
   .option("-r, --remove <target>", "Permanently remove lock and restore target")
   .option("-s, --shred <target>", "Destroy a locked folder for good (no restore)");
 
@@ -240,11 +290,19 @@ program
   .action(
     withErrorHandling(async (target) => {
       const options = program.opts();
-      if ([options.unlock, options.remove, options.shred].filter(Boolean).length > 1) {
-        throw new Error("Use only one of --unlock/-u, --remove/-r, --shred/-s.");
+      if ([options.unlock, options.remove, options.shred, options.all].filter(Boolean).length > 1) {
+        throw new Error("Use only one of --unlock/-u, --remove/-r, --shred/-s, --all/-a.");
+      }
+      if (options.for && !options.unlock) {
+        throw new Error("--for goes with --unlock, e.g. tlock -u <folder> --for 30m");
+      }
+      if (options.all) {
+        if (target) throw new Error("--all takes no target.");
+        runLockAll();
+        return;
       }
       if (options.unlock) {
-        await runUnlock(options.unlock);
+        await runUnlock(options.unlock, options.for);
         return;
       }
       if (options.remove) {
@@ -278,7 +336,8 @@ program
 program
   .command("unlock <target>")
   .description("Unlock a locked folder, or launch a locked app")
-  .action(withErrorHandling((target) => runUnlock(target)));
+  .option("--for <duration>", "Lock the folder again after this long (e.g. 30m, 2h)")
+  .action(withErrorHandling((target, options) => runUnlock(target, options.for ?? program.opts().for)));
 
 // list
 program
@@ -308,6 +367,15 @@ program
   .description("Destroy a locked folder for good: erase its keys and delete the image (no restore)")
   .action(withErrorHandling((target) => runShred(target)));
 
+// autolock
+program
+  .command("autolock")
+  .description("Show or change when unlocked folders lock themselves")
+  .option("--idle <duration>", "Lock after this long without keyboard/mouse input (e.g. 15m), or off")
+  .option("--sleep <on|off>", "Lock when the Mac sleeps")
+  .option("--screen-lock <on|off>", "Lock when the screen locks or another user switches in")
+  .action(withErrorHandling(async (options) => runAutolock(options)));
+
 // status
 program
   .command("status [target]")
@@ -333,6 +401,11 @@ program
       console.log();
     })
   );
+
+// Hidden background watcher started by `tlock unlock`
+program
+  .command("autolock-watch", { hidden: true })
+  .action(() => runWatcher());
 
 // Hidden subcommand used by the app-lock wrapper script
 program

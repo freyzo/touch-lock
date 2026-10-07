@@ -21,6 +21,8 @@ const LOCK_STALE_MS = 5_000;
 const LOCK_MAX_WAIT_MS = 10_000;
 const sleepCell = new Int32Array(new SharedArrayBuffer(4));
 
+const DEFAULT_SETTINGS = { idleMinutes: 15, lockOnSleep: true, lockOnScreenLock: true };
+
 /**
  * Create ~/.tlock (owner-only) if needed.
  */
@@ -100,7 +102,7 @@ function writeConfig(config) {
 
 /**
  * Returns all lock registry entries.
- * Each entry: { target, type: "folder"|"app", dmgPath? (folder image), executableName? (app), createdAt }
+ * Each entry: { target, type: "folder"|"app", dmgPath? (folder image), executableName? (app), autoLockAt? (epoch ms), createdAt }
  */
 export function getLockRegistry() {
   return readConfig().entries;
@@ -151,6 +153,40 @@ export function removeEntry(targetPath) {
     const [removedEntry] = config.entries.splice(entryIndex, 1);
     writeConfig(config);
     return removedEntry;
+  } finally {
+    releaseLock();
+  }
+}
+
+/**
+ * Merge fields into an existing entry (undefined values are dropped on write).
+ */
+export function updateEntry(targetPath, patch) {
+  acquireLock();
+  try {
+    const config = readConfig();
+    const entry = config.entries.find((existing) => existing.target === targetPath);
+    if (!entry) return;
+    Object.assign(entry, patch);
+    writeConfig(config);
+  } finally {
+    releaseLock();
+  }
+}
+
+/**
+ * Auto-lock settings: { idleMinutes (0 = off), lockOnSleep, lockOnScreenLock }.
+ */
+export function getSettings() {
+  return { ...DEFAULT_SETTINGS, ...readConfig().settings };
+}
+
+export function updateSettings(patch) {
+  acquireLock();
+  try {
+    const config = readConfig();
+    config.settings = { ...config.settings, ...patch };
+    writeConfig(config);
   } finally {
     releaseLock();
   }
