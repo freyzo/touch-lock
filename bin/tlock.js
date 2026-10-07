@@ -7,14 +7,14 @@ import { platform } from "os";
 import { readFileSync, existsSync, statSync } from "fs";
 import { fileURLToPath } from "url";
 import { basename, dirname, join, resolve } from "path";
-import { lockFolder, unlockFolder, removeFolder, shredFolder, lockAllFolders } from "../src/lock-folder.js";
+import { lockFolder, unlockFolder, removeFolder, shredFolder, lockAllFolders, isMountPoint } from "../src/lock-folder.js";
 import { lockApp, unlockApp, removeApp } from "../src/lock-app.js";
 import { authenticate } from "../src/auth.js";
 import { getLockRegistry, getEntry, canonicalPath, getSettings, updateSettings } from "../src/config.js";
 import { parseDuration, describeAutoLock, ensureWatcher, runWatcher } from "../src/autolock.js";
 import {
   printKvBox,
-  printLockedTargetsTable,
+  printLockedTargets,
   printStatusSummary,
   printEntryStatus,
   stripAnsi,
@@ -357,7 +357,7 @@ program
         console.log("\n  " + chalk.dim("No locked targets.") + "\n");
         return;
       }
-      printLockedTargetsTable(entries, formatDate);
+      printLockedTargets(entries, formatDate, (entry) => isMountPoint(entry.target));
     })
   );
 

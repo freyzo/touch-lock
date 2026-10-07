@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { basename } from "path";
 
 const B = {
   tl: "┌",
@@ -9,9 +10,6 @@ const B = {
   v: "│",
   lj: "├",
   rj: "┤",
-  tm: "┬",
-  bm: "┴",
-  mm: "┼",
 };
 
 export function stripAnsi(s) {
@@ -133,107 +131,75 @@ export function printKvBox(title, rows) {
   console.log([top, titleLine, sep, ...body, bot].join("\n"));
 }
 
-function printStackedTable(entries, formatDate, indent, innerW, border, titleStyle, dim) {
-  const lines = [
-    indent + border(B.tl + hr(innerW + 2) + B.tr),
-    boxLine(indent, border, fitVisible(titleStyle("LOCKED TARGETS"), innerW)),
-    indent + border(B.lj + hr(innerW + 2) + B.rj),
-  ];
+function pluralize(count, word) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
 
-  entries.forEach((e, i) => {
-    const typeW = 6;
-    const type = fitVisible(e.type, typeW);
-    const gap = 2;
-    const pathBudget = Math.max(4, innerW - typeW - gap);
-    const pathLines = wrapAnsi(displayPath(e.target), pathBudget);
-    pathLines.forEach((pl, j) => {
-      const prefix = j === 0 ? type : " ".repeat(typeW);
-      lines.push(boxLine(indent, border, fitVisible(`${prefix}${" ".repeat(gap)}${pl}`, innerW)));
-    });
-    const when = `${" ".repeat(typeW + gap)}${formatDate(e.createdAt)}`;
-    lines.push(boxLine(indent, border, fitVisible(dim(when), innerW)));
-    if (i < entries.length - 1) {
-      lines.push(indent + border(B.lj + hr(innerW + 2) + B.rj));
+/** Wrap plain text to width, preferring breaks after "/" or a space. */
+function wrapPlain(text, width) {
+  const lines = [];
+  let line = "";
+  for (const token of String(text).split(/(?<=[/ ])/)) {
+    if (line && line.length + token.length > width) {
+      lines.push(line.trimEnd());
+      line = "";
     }
-  });
+    let rest = token;
+    while (rest.length > width) {
+      lines.push(rest.slice(0, width));
+      rest = rest.slice(width);
+    }
+    line += rest;
+  }
+  if (line || lines.length === 0) lines.push(line.trimEnd());
+  return lines;
+}
 
-  lines.push(indent + border(B.bl + hr(innerW + 2) + B.br));
-  console.log("\n" + lines.join("\n") + "\n");
+function clockTime(epochMs) {
+  return new Date(epochMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 /**
- * Registry list. Three columns when there is room; stacked rows when the
- * terminal is too narrow. Every line is clipped to the current width.
+ * Registry list as short blocks: name and state, then path and date.
+ * No columns, so it reads the same at any terminal width.
  */
-export function printLockedTargetsTable(entries, formatDate) {
-  const indent = "  ";
-  const titleStyle = chalk.cyan;
-  const border = chalk.green;
-  const dim = chalk.dim;
-  const cols = terminalColumns();
-  const innerW = Math.max(8, cols - indent.length - 4);
+export function printLockedTargets(entries, formatDate, isUnlocked) {
+  const width = terminalColumns();
+  const detailWidth = Math.max(10, width - 4);
+  const folders = entries.filter((entry) => entry.type === "folder").length;
+  const apps = entries.length - folders;
+  const counts = [folders && pluralize(folders, "folder"), apps && pluralize(apps, "app")]
+    .filter(Boolean)
+    .join(", ");
 
-  // indent + 4 borders + 6 cell pads = 12 columns of chrome for a 3-col row.
-  const chrome = indent.length + 10;
-  const budget = cols - chrome;
-  const wType = 6;
-  const dates = entries.map((e) => formatDate(e.createdAt));
-  const wWhen = Math.max(vlen("Locked at"), ...dates.map((d) => vlen(d)));
-  const wPath = budget - wType - wWhen;
-  // Need a readable path column and the full timestamp; otherwise stack.
-  if (wPath < 16) {
-    printStackedTable(entries, formatDate, indent, innerW, border, titleStyle, dim);
-    return;
+  const lines = ["", `  ${chalk.cyan.bold("Locks")}  ${chalk.dim(counts)}`, ""];
+  for (const entry of entries) {
+    let state = chalk.dim("app");
+    if (entry.type === "folder") {
+      state = !isUnlocked(entry)
+        ? chalk.green("locked")
+        : chalk.yellow(entry.autoLockAt ? `open until ${clockTime(entry.autoLockAt)}` : "open");
+    }
+    const name = basename(entry.target).replace(/\.app$/, "");
+
+    const details = wrapPlain(displayPath(entry.target), detailWidth);
+    const added = `added ${formatDate(entry.createdAt)}`;
+    const last = details[details.length - 1];
+    if (last.length + 2 + added.length <= detailWidth) {
+      details[details.length - 1] = `${last}  ${added}`;
+    } else {
+      details.push(added);
+    }
+
+    if (name.length + 2 + vlen(state) <= width - 2) {
+      lines.push(`  ${chalk.bold(name)}  ${state}`);
+    } else {
+      lines.push(`  ${chalk.bold(truncMiddle(name, width - 2))}`);
+      lines.push(`    ${state}`);
+    }
+    lines.push(...details.map((detail) => `    ${chalk.dim(detail)}`), "");
   }
-
-  const c1 = wType + 2;
-  const c2 = wPath + 2;
-  const c3 = wWhen + 2;
-  const titlePad = c1 + c2 + c3;
-
-  const lines = [];
-  lines.push(indent + border(B.tl + hr(titlePad + 2) + B.tr));
-  lines.push(boxLine(indent, border, fitVisible(titleStyle("LOCKED TARGETS"), titlePad)));
-  lines.push(indent + border(B.lj + hr(c1) + B.tm + hr(c2) + B.tm + hr(c3) + B.rj));
-  lines.push(
-    indent +
-      border(B.v) +
-      " " +
-      dim(fitVisible("Type", wType)) +
-      " " +
-      border(B.v) +
-      " " +
-      dim(fitVisible("Path", wPath)) +
-      " " +
-      border(B.v) +
-      " " +
-      dim(fitVisible("Locked at", wWhen)) +
-      " " +
-      border(B.v)
-  );
-  lines.push(indent + border(B.lj + hr(c1) + B.mm + hr(c2) + B.mm + hr(c3) + B.rj));
-
-  for (const e of entries) {
-    lines.push(
-      indent +
-        border(B.v) +
-        " " +
-        fitVisible(e.type, wType) +
-        " " +
-        border(B.v) +
-        " " +
-        fitVisible(truncMiddle(displayPath(e.target), wPath), wPath) +
-        " " +
-        border(B.v) +
-        " " +
-        fitVisible(formatDate(e.createdAt), wWhen) +
-        " " +
-        border(B.v)
-    );
-  }
-
-  lines.push(indent + border(B.bl + hr(c1) + B.bm + hr(c2) + B.bm + hr(c3) + B.br));
-  console.log("\n" + lines.join("\n") + "\n");
+  console.log(lines.join("\n"));
 }
 
 /**
