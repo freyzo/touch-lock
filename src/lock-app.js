@@ -197,6 +197,13 @@ function appBinaryPaths(appPath, executableName) {
   return { binaryPath, renamedBinaryPath: `${binaryPath}${ORIGINAL_BINARY_SUFFIX}` };
 }
 
+/**
+ * False when an app update or reinstall replaced the tlock wrapper.
+ */
+export function isAppLocked(entry) {
+  return isTlockWrapper(appBinaryPaths(entry.target, entry.executableName).binaryPath);
+}
+
 // ─── Public API ─────────────────────────────────────────────────────
 
 /**

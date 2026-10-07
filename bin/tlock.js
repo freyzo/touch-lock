@@ -8,15 +8,17 @@ import { readFileSync, existsSync, statSync } from "fs";
 import { fileURLToPath } from "url";
 import { basename, dirname, join, resolve } from "path";
 import { lockFolder, unlockFolder, removeFolder, shredFolder, lockAllFolders, isMountPoint } from "../src/lock-folder.js";
-import { lockApp, unlockApp, removeApp } from "../src/lock-app.js";
+import { lockApp, unlockApp, removeApp, isAppLocked } from "../src/lock-app.js";
 import { authenticate } from "../src/auth.js";
 import { getLockRegistry, getEntry, canonicalPath, getSettings, updateSettings } from "../src/config.js";
 import { parseDuration, describeAutoLock, ensureWatcher, runWatcher } from "../src/autolock.js";
 import {
+  clockTime,
   printKvBox,
   printLockedTargets,
   printStatusSummary,
   printEntryStatus,
+  renderTable,
   stripAnsi,
   terminalColumns,
 } from "../src/tui.js";
@@ -267,6 +269,35 @@ function formatDate(isoString) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function lockState(entry) {
+  if (entry.type === "app") {
+    return isAppLocked(entry) ? { label: "locked", tone: "ok" } : { label: "lock lost", tone: "bad" };
+  }
+  if (!isMountPoint(entry.target)) return { label: "locked", tone: "ok" };
+  return { label: entry.autoLockAt ? `open until ${clockTime(entry.autoLockAt)}` : "open", tone: "warn" };
+}
+
+const QUICK_REFERENCE = [
+  ["Lock a folder or app", 'tlock <folder>   tlock "App Name"'],
+  ["Open a locked folder", "tlock -u <folder>"],
+  ["Open it for a while", "tlock -u <folder> --for 30m"],
+  ["Lock it again", "tlock <folder>"],
+  ["Lock everything now", "tlock --all"],
+  ["Auto-lock rules", "tlock autolock --idle 15m"],
+  ["See your locks", "tlock list"],
+  ["Restore normal folder/app", "tlock -r <target>"],
+  ["Destroy a folder for good", "tlock -s <folder>"],
+];
+
+function quickReference() {
+  const columns = [
+    { header: "Task", min: 16 },
+    { header: "Command", min: 28 },
+  ];
+  const rows = QUICK_REFERENCE.map(([task, command]) => [{ text: task }, { text: command, style: blueLt }]);
+  return `\n${renderTable(blue("QUICK REFERENCE"), columns, rows)}\n`;
+}
+
 // ─── CLI ────────────────────────────────────────────────────────────
 
 const program = new Command();
@@ -289,7 +320,8 @@ program
   .option("--for <duration>", "With --unlock: lock the folder again after this long (e.g. 30m, 2h)")
   .option("-a, --all", "Lock every unlocked folder now")
   .option("-r, --remove <target>", "Permanently remove lock and restore target")
-  .option("-s, --shred <target>", "Destroy a locked folder for good (no restore)");
+  .option("-s, --shred <target>", "Destroy a locked folder for good (no restore)")
+  .addHelpText("after", quickReference);
 
 // Default command: lock a target
 program
@@ -357,7 +389,7 @@ program
         console.log("\n  " + chalk.dim("No locked targets.") + "\n");
         return;
       }
-      printLockedTargets(entries, formatDate, (entry) => isMountPoint(entry.target));
+      printLockedTargets(entries, formatDate, lockState);
     })
   );
 

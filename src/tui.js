@@ -10,7 +10,11 @@ const B = {
   v: "│",
   lj: "├",
   rj: "┤",
+  tm: "┬",
+  bm: "┴",
+  mm: "┼",
 };
+const INDENT = "  ";
 
 export function stripAnsi(s) {
   return String(s).replace(/\x1b\[[0-9;]*m/g, "");
@@ -135,11 +139,15 @@ function pluralize(count, word) {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
-/** Wrap plain text to width, preferring breaks after "/" or a space. */
+/** Wrap plain text to width: breaks after "/" or a space, then inside long words after - _ . */
 function wrapPlain(text, width) {
+  const tokens = [];
+  for (const token of String(text).split(/(?<=[/ ])/)) {
+    tokens.push(...(token.length > width ? token.split(/(?<=[-_.])/) : [token]));
+  }
   const lines = [];
   let line = "";
-  for (const token of String(text).split(/(?<=[/ ])/)) {
+  for (const token of tokens) {
     if (line && line.length + token.length > width) {
       lines.push(line.trimEnd());
       line = "";
@@ -155,51 +163,148 @@ function wrapPlain(text, width) {
   return lines;
 }
 
-function clockTime(epochMs) {
+export function clockTime(epochMs) {
   return new Date(epochMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+const sum = (values) => values.reduce((total, value) => total + value, 0);
+
 /**
- * Registry list as short blocks: name and state, then path and date.
- * No columns, so it reads the same at any terminal width.
+ * Column widths that fit the terminal, or null if the columns' `min` widths do not.
+ * Space above the minimums is shared in proportion to how much each column still needs.
  */
-export function printLockedTargets(entries, formatDate, isUnlocked) {
+function fitColumns(columns, rows, width) {
+  const budget = width - INDENT.length - (3 * columns.length + 1);
+  const natural = columns.map((column, i) =>
+    Math.max(column.header.length, ...rows.map((row) => row[i].text.length))
+  );
+  const floors = columns.map((column, i) => Math.min(natural[i], Math.max(column.header.length, column.min)));
+  const spare = budget - sum(floors);
+  if (spare < 0) return null;
+
+  const need = natural.map((n, i) => n - floors[i]);
+  const totalNeed = sum(need);
+  if (totalNeed <= spare) return natural;
+  const widths = floors.map((floor, i) => floor + Math.floor((spare * need[i]) / totalNeed));
+  for (let leftover = budget - sum(widths); leftover > 0; leftover--) {
+    let neediest = 0;
+    widths.forEach((w, i) => {
+      if (natural[i] - w > natural[neediest] - widths[neediest]) neediest = i;
+    });
+    widths[neediest] += 1;
+  }
+  return widths;
+}
+
+/** Title parts on one line when they fit, otherwise one part per line. */
+function titleLines(title, inner) {
+  const parts = Array.isArray(title) ? title.filter(Boolean) : [title];
+  const joined = parts.join("  ");
+  return vlen(joined) <= inner ? [joined] : parts;
+}
+
+function drawGrid(title, columns, rows, widths) {
+  const border = chalk.green;
+  const inner = sum(widths.map((w) => w + 3)) - 1;
+  const rule = (left, middle, right) => INDENT + border(left + widths.map((w) => hr(w + 2)).join(middle) + right);
+  const rowLines = (cells) => {
+    const wrapped = cells.map((cell, i) =>
+      wrapPlain(cell.text, widths[i]).map((line) => (cell.style ? cell.style(line) : line))
+    );
+    const height = Math.max(...wrapped.map((lines) => lines.length));
+    return Array.from({ length: height }, (_, k) =>
+      INDENT + border(B.v) +
+      wrapped.map((lines, i) => ` ${fitVisible(lines[k] ?? "", widths[i])} `).join(border(B.v)) +
+      border(B.v)
+    );
+  };
+
+  const bodies = rows.map(rowLines);
+  const separateRows = bodies.some((lines) => lines.length > 1);
+  const out = [
+    INDENT + border(B.tl + hr(inner) + B.tr),
+    ...titleLines(title, inner - 2).map((text) => boxLine(INDENT, border, fitVisible(text, inner - 2))),
+    rule(B.lj, B.tm, B.rj),
+    ...rowLines(columns.map((column) => ({ text: column.header, style: chalk.dim }))),
+    rule(B.lj, B.mm, B.rj),
+  ];
+  bodies.forEach((lines, i) => {
+    out.push(...lines);
+    if (separateRows && i < bodies.length - 1) out.push(rule(B.lj, B.mm, B.rj));
+  });
+  out.push(rule(B.bl, B.bm, B.br));
+  return out.join("\n");
+}
+
+/** One cell per line, for terminals too narrow for columns. */
+function drawStacked(title, rows, width) {
+  const border = chalk.green;
+  const inner = Math.max(8, width - INDENT.length - 4);
+  const line = (text) => boxLine(INDENT, border, fitVisible(text, inner));
+  const rule = (left, right) => INDENT + border(left + hr(inner + 2) + right);
+  const out = [rule(B.tl, B.tr), ...titleLines(title, inner).map(line), rule(B.lj, B.rj)];
+  rows.forEach((cells, i) => {
+    for (const cell of cells) {
+      if (!cell.text) continue;
+      out.push(...wrapPlain(cell.text, inner).map((text) => line(cell.style ? cell.style(text) : text)));
+    }
+    if (i < rows.length - 1) out.push(rule(B.lj, B.rj));
+  });
+  out.push(rule(B.bl, B.br));
+  return out.join("\n");
+}
+
+/**
+ * Bordered table sized to the current terminal width. Cells wrap at word and path boundaries;
+ * when space runs out, columns with a `drop` rank go first (highest first), and below that
+ * each row is stacked one cell per line.
+ * title: string or [title, detail]; columns: [{ header, min, drop? }]; rows: [[{ text, style? }]].
+ */
+export function renderTable(title, columns, rows) {
   const width = terminalColumns();
-  const detailWidth = Math.max(10, width - 4);
+  let active = columns.map((_, i) => i);
+  const pick = (row) => active.map((i) => row[i]);
+  while (true) {
+    const shownColumns = pick(columns);
+    const shownRows = rows.map(pick);
+    const widths = fitColumns(shownColumns, shownRows, width);
+    if (widths) return drawGrid(title, shownColumns, shownRows, widths);
+
+    const droppable = active.filter((i) => columns[i].drop).sort((a, b) => columns[b].drop - columns[a].drop);
+    if (droppable.length === 0) return drawStacked(title, rows, width);
+    active = active.filter((i) => i !== droppable[0]);
+  }
+}
+
+const TONES = { ok: chalk.green, warn: chalk.yellow, bad: chalk.red };
+
+/**
+ * Registry table. stateOf(entry) returns { label, tone: "ok" | "warn" | "bad" }.
+ */
+export function printLockedTargets(entries, formatDate, stateOf) {
   const folders = entries.filter((entry) => entry.type === "folder").length;
   const apps = entries.length - folders;
   const counts = [folders && pluralize(folders, "folder"), apps && pluralize(apps, "app")]
     .filter(Boolean)
     .join(", ");
 
-  const lines = ["", `  ${chalk.cyan.bold("Locks")}  ${chalk.dim(counts)}`, ""];
-  for (const entry of entries) {
-    let state = chalk.dim("app");
-    if (entry.type === "folder") {
-      state = !isUnlocked(entry)
-        ? chalk.green("locked")
-        : chalk.yellow(entry.autoLockAt ? `open until ${clockTime(entry.autoLockAt)}` : "open");
-    }
-    const name = basename(entry.target).replace(/\.app$/, "");
+  const columns = [
+    { header: "Name", min: 14 },
+    { header: "Status", min: 9 },
+    { header: "Path", min: 24 },
+    { header: "Added", min: 16, drop: 1 },
+  ];
+  const rows = entries.map((entry) => {
+    const state = stateOf(entry);
+    return [
+      { text: basename(entry.target), style: chalk.bold },
+      { text: state.label, style: TONES[state.tone] },
+      { text: displayPath(entry.target) },
+      { text: formatDate(entry.createdAt), style: chalk.dim },
+    ];
+  });
 
-    const details = wrapPlain(displayPath(entry.target), detailWidth);
-    const added = `added ${formatDate(entry.createdAt)}`;
-    const last = details[details.length - 1];
-    if (last.length + 2 + added.length <= detailWidth) {
-      details[details.length - 1] = `${last}  ${added}`;
-    } else {
-      details.push(added);
-    }
-
-    if (name.length + 2 + vlen(state) <= width - 2) {
-      lines.push(`  ${chalk.bold(name)}  ${state}`);
-    } else {
-      lines.push(`  ${chalk.bold(truncMiddle(name, width - 2))}`);
-      lines.push(`    ${state}`);
-    }
-    lines.push(...details.map((detail) => `    ${chalk.dim(detail)}`), "");
-  }
-  console.log(lines.join("\n"));
+  console.log(`\n${renderTable([chalk.cyan("LOCKED TARGETS"), chalk.dim(counts)], columns, rows)}\n`);
 }
 
 /**
