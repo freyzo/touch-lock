@@ -18,6 +18,7 @@ import {
   printStatusSummary,
   printEntryStatus,
   stripAnsi,
+  terminalColumns,
 } from "../src/tui.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -89,6 +90,12 @@ function printBanner() {
     const subtitleRaw = `made by freyzo  v${VERSION}`;
     const width       = Math.max(rawWidth, subtitleRaw.length) + 2;
     const dash        = blue("─");
+
+    // Figlet art is ~45 columns; skip it rather than wrap and look broken.
+    if (width + 4 > terminalColumns()) {
+      console.log(`\n  tlock  ${blue("v" + VERSION)}\n`);
+      return;
+    }
 
     console.log("");
     console.log("  " + blue("┌") + dash.repeat(width) + blue("┐"));
