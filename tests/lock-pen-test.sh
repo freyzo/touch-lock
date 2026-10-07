@@ -7,6 +7,7 @@ set -euo pipefail
 # 2) `tlock unlock <folder>` restores the contents and the volume is writable
 # 3) `tlock <folder>` while unlocked locks (ejects) it again
 # 4) `tlock remove <folder>` brings back a normal folder with every file
+# 5) `tlock shred <folder>` on a fresh lock leaves no folder, image, key file, or registry entry
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ ! -d "$REPO_DIR/node_modules" ]; then
@@ -68,3 +69,14 @@ grep -q "RESTORED" "$LOG" || fail "remove command did not report success."
 [ -f "$TARGET/added.txt" ] || fail "file added while unlocked was lost."
 ! tlock status "$TARGET" >/dev/null 2>&1 || fail "lock still registered after remove."
 echo "PASS: lock, unlock, re-lock, and remove round-trip verified."
+
+echo "== Step 5: lock again, then shred =="
+run "$TARGET" || fail "lock before shred failed."
+run shred "$TARGET" || fail "shred command failed."
+grep -q "SHREDDED" "$LOG" || fail "shred command did not report success."
+[ ! -e "$TARGET" ] || fail "shredded folder path still exists."
+! tlock status "$TARGET" >/dev/null 2>&1 || fail "lock still registered after shred."
+if compgen -G "$HOME/.tlock/$(basename "$TARGET")-*" >/dev/null; then
+  fail "image or key file left after shred."
+fi
+echo "PASS: shred left nothing behind."

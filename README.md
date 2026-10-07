@@ -35,8 +35,8 @@ The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). 
 - **`tlock`** is one CLI:
   - **Folders** → AES-256 encrypted, writable disk image; plain folder removed after the image is created and registered.
   - **Apps** → wrapper + renamed binary so **Touch ID / password** runs before launch.
-- **Lock, unlock, and remove** go through **authentication** (Touch ID first, Keychain-backed password fallback). Putting an unlocked folder away again needs none, since it only removes access.
-- Short flags: **`-u`** unlock, **`-r`** remove (same as `unlock` / `remove`).
+- **Lock, unlock, remove, and shred** go through **authentication**: Touch ID or your Mac login password, enforced by the Secure Enclave, with a recovery passphrase as fallback. Putting an unlocked folder away again needs none, since it only removes access.
+- Short flags: **`-u`** unlock, **`-r`** remove, **`-s`** shred (same as `unlock` / `remove` / `shred`).
 
 **Summary**
 
@@ -47,6 +47,7 @@ The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). 
 | Open locked folder | `tlock unlock /path` or `tlock -u /path` |
 | Put an unlocked folder away again | `tlock /path` (or eject it in Finder) |
 | Stop using tlock on folder (restore normal folder) | `tlock remove /path` or `tlock -r /path` |
+| Destroy a locked folder for good (no restore) | `tlock shred /path` or `tlock -s /path` |
 | Forget a lock whose image or app is gone | `tlock remove --force /path` |
 | List locks | `tlock list` |
 | Summary / detail | `tlock status` or `tlock status /path` |
@@ -83,21 +84,25 @@ tlock [target]
 | --- | --- |
 | `target` | Folder path or app name / `.app` path to lock. Auto-detects folder vs app. Run it again on an unlocked folder to lock it again. |
 
-**First run:** you create a **master password** (stored in macOS Keychain). Lock still asks for **Touch ID / password** before encrypting.
+**First run:** you create a **recovery passphrase** (12+ characters). It is never stored: day to day you unlock with Touch ID or your Mac login password, and the passphrase is the way back in on a new Mac or if the Secure Enclave key is lost. **Forget it and lose this Mac, and locked folders cannot be recovered.**
+
+**Upgrading from 0.1.x:** after you create the recovery passphrase, existing folder locks are re-keyed automatically and the old master password is deleted from Keychain.
 
 A folder named like a subcommand (`list`, `status`, `unlock`, `remove`) must be passed as a path, e.g. `tlock ./list`.
 
-### Unlock / remove (long or short)
+### Unlock / remove / shred (long or short)
 
 ```bash
 tlock unlock <target>     # or:  tlock -u <target>
 tlock remove <target>     # or:  tlock -r <target>
+tlock shred <target>      # or:  tlock -s <target>
 ```
 
 | Command | Description |
 | --- | --- |
 | `unlock` / `-u` | Folder: authenticate, then mount its image at the original path. App: open it; its wrapper asks for Touch ID / password. |
 | `remove` / `-r` | Authenticate, restore normal folder or app binary, delete the image / wrapper. `--force` forgets a lock whose image or app binary is missing. |
+| `shred` / `-s` | Folder only. Authenticate, eject if open, erase the image's keys (`hdiutil erasekeys`), overwrite the key file, delete the image, and clear Quick Look thumbnails, Recents and the parent's `.DS_Store`. Nothing is restored. |
 
 ### Other commands
 
@@ -152,7 +157,7 @@ Security round-trip against this checkout (run `npm install` first):
 npm run test:pen
 ```
 
-Checks: lock succeeds → **path gone** while locked → unlock → file contents match and the volume is writable → lock again → remove restores every file. You'll be asked to authenticate three times.
+Checks: lock succeeds → **path gone** while locked → unlock → file contents match and the volume is writable → lock again → remove restores every file → lock and shred leave nothing behind. You'll be asked to authenticate five times (the macOS Touch ID sheet with the tlock logo). Like `lok -s`, the shred step also clears Recents.
 
 ---
 
@@ -160,8 +165,8 @@ Checks: lock succeeds → **path gone** while locked → unlock → file content
 
 ### Folders
 
-1. `hdiutil` creates an AES-256 encrypted, writable APFS sparse image (`~/.tlock/<name>-<hash>.sparseimage`, only used space is stored) and `ditto` copies the folder in.
-2. The lock is registered, then the original folder is removed.
+1. `hdiutil` creates an AES-256 encrypted, writable APFS sparse image (`~/.tlock/<name>-<hash>.sparseimage`, only used space is stored) with its own random key, and `ditto` copies the folder in.
+2. The lock is registered, then every file in the original folder is overwritten with random bytes and the folder is removed.
 3. `tlock unlock` attaches the image at the original path.
 4. `tlock <path>` (or eject in Finder) puts it away; the encrypted image stays under `~/.tlock/`.
 
@@ -170,14 +175,16 @@ tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, 
 ### Apps
 
 1. `CFBundleExecutable` binary renamed to `<name>.tlock-original`; bash wrapper installed in its place.
-2. Wrapper runs hidden `tlock auth-gate` with the Node.js and tlock paths recorded at lock time → Touch ID, or the master password (terminal prompt, or a macOS dialog when launched from Finder / Dock) → `exec` real binary.
+2. Wrapper runs hidden `tlock auth-gate` with the Node.js and tlock paths recorded at lock time → Touch ID / Mac login password, or the recovery passphrase (terminal prompt, or a macOS dialog when launched from Finder / Dock) → `exec` real binary.
 3. `tlock unlock <app>` just opens the app; the wrapper asks.
 4. Run `tlock <app>` again to repair the wrapper (e.g. after Node.js moved) or to re-apply the lock after an app update.
 
 ### Authentication
 
-- **Touch ID** via `LocalAuthentication`: a small Swift helper compiled once to `~/.tlock/touchid-helper-<hash>` (falls back to `swift -e` if `swiftc` is missing).
-- **Password** fallback vs Keychain item `service=tlock`, `account=master`. After 5 wrong passwords, wait up to a minute.
+- **Keys, not a yes/no check.** Each image has a random 256-bit key, sealed (AES-256-GCM) by a vault key. The vault key is derived from your recovery passphrase (scrypt) and also sealed to a **Secure Enclave** key created with `.userPresence`: the chip only releases it after Touch ID (any enrolled finger) or your Mac login password. Editing tlock's code or swapping its helper does not get anyone past that.
+- **The prompt** is the standard macOS Touch ID sheet: "tlock is trying to unlock “folder”", with the tlock logo. It comes from a small Swift helper built once into `~/.tlock/helper-<hash>/tlock.app` (needs `swiftc` from the Xcode Command Line Tools).
+- **Recovery passphrase** is asked for when the Secure Enclave is unavailable, or if you cancel the prompt. After 5 wrong passphrases, wait up to a minute. On a new Mac, one correct passphrase sets up Touch ID again.
+- System tools are called by absolute path (`/usr/bin/hdiutil`, …), so a look-alike earlier in `PATH` is never run.
 
 ---
 
@@ -187,8 +194,9 @@ tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, 
 | --- | --- |
 | Lock registry | `~/.tlock/config.json` |
 | Encrypted images | `~/.tlock/*.sparseimage` (older locks: `*.dmg`) |
-| Master password | macOS Keychain (`tlock` / `master`) |
-| Touch ID helper | `~/.tlock/touchid-helper-<hash>` |
+| Per-image keys (sealed) | `~/.tlock/*.sparseimage.key` — keep next to the image |
+| Vault (sealed vault key, no passphrase) | `~/.tlock/vault.json` — rebuilt from the recovery passphrase if lost |
+| Touch ID helper | `~/.tlock/helper-<hash>/tlock.app` |
 | Failed password attempts | `~/.tlock/.auth-failures` |
 | Registry write lock | `~/.tlock/config.lock` (transient) |
 | Temporary mount points | `~/.tlock/mount-*` (transient) |
@@ -209,11 +217,12 @@ tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, 
 
 ## Security notes
 
-- Folder images use native AES-256 encryption (`hdiutil`); the password is the tlock master password.
-- Touch ID uses Secure Enclave — template data does not leave the chip.
-- **Same-user processes are not kept out.** The master password lives in your login Keychain, and any process running as you can read it with `security find-generic-password` without a prompt, then mount an image directly. Touch ID gates tlock's own commands only. A process running as you could also replace `~/.tlock/touchid-helper-*`.
-- **App wrapper** is not a kernel barrier; admin or determined local attacker may bypass.
-- **Folder images** are much stronger than app rename/wrapper.
+- Folder images use native AES-256 encryption (`hdiutil`) with a random key per image; nothing usable is stored in Keychain.
+- **Someone at your unlocked Mac with a terminal** cannot open a locked folder without your finger, your Mac login password, or the recovery passphrase.
+- **Not covered:** malware running as you can read a folder *while it is unlocked*, or tamper with tlock and capture a key the next time you authenticate. Only a separate macOS account plus FileVault protects against that.
+- **Copies made before locking** (Time Machine, APFS local snapshots, iCloud / Dropbox versions) still hold the plain folder. Overwriting files before deletion is best effort on SSDs and APFS. Turn on FileVault.
+- **App wrapper** is a deterrent, not a barrier: the real binary stays runnable (`Contents/MacOS/<name>.tlock-original`) and the app's data in `~/Library` is not encrypted.
+- **Shred** erases the image's keys and the key file, but copies of `~/.tlock` in backups can still be opened with your recovery passphrase.
 
 ---
 

@@ -9,7 +9,6 @@ import {
   scryptSync,
 } from "crypto";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -18,7 +17,8 @@ import {
   rmSync,
   writeFileSync,
 } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { TLOCK_STORAGE_DIR, ensureStorageDir } from "./config.js";
 import { BIN } from "./bins.js";
 
@@ -145,12 +145,32 @@ default:
 }
 `;
 
-// Binary is named "tlock" because macOS shows that name in the Touch ID dialog.
+// Bundled as tlock.app so the macOS Touch ID sheet says "tlock" and badges the fingerprint with the tlock logo.
+const HELPER_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>tlock</string>
+  <key>CFBundleIdentifier</key><string>com.freyzo.tlock</string>
+  <key>CFBundleName</key><string>tlock</string>
+  <key>CFBundleDisplayName</key><string>tlock</string>
+  <key>CFBundleIconFile</key><string>tlock</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>
+`;
+const LOGO_FILE = fileURLToPath(new URL("../assets/tlock-logo.webp", import.meta.url));
+const ICON_SIZES = [16, 32, 128, 256, 512];
+
 const HELPER_DIR = join(
   TLOCK_STORAGE_DIR,
-  `helper-${createHash("sha256").update(SE_HELPER_SOURCE).digest("hex").slice(0, 12)}`
+  `helper-${createHash("sha256").update(SE_HELPER_SOURCE).update(HELPER_INFO_PLIST).digest("hex").slice(0, 12)}`
 );
-const HELPER_BINARY = join(HELPER_DIR, "tlock");
+const HELPER_APP = join(HELPER_DIR, "tlock.app");
+const HELPER_BINARY = join(HELPER_APP, "Contents", "MacOS", "tlock");
+export const HELPER_ICON = join(HELPER_APP, "Contents", "Resources", "tlock.icns");
 const OLD_HELPER_PATTERN = /^(touchid-helper(-[0-9a-f]{12})?|helper-[0-9a-f]{12})$/;
 
 let helperPath;
@@ -162,19 +182,49 @@ function secureEnclaveHelper() {
   return helperPath;
 }
 
+function buildIcon(icnsPath) {
+  const iconset = join(dirname(icnsPath), "tlock.iconset");
+  try {
+    mkdirSync(iconset, { recursive: true });
+    for (const size of ICON_SIZES) {
+      for (const scale of [1, 2]) {
+        const pixels = String(size * scale);
+        const name = `icon_${size}x${size}${scale === 2 ? "@2x" : ""}.png`;
+        execFileSync(BIN.sips, ["-s", "format", "png", "-z", pixels, pixels, LOGO_FILE, "--out", join(iconset, name)], {
+          stdio: "ignore",
+        });
+      }
+    }
+    execFileSync(BIN.iconutil, ["-c", "icns", iconset, "-o", icnsPath], { stdio: "ignore" });
+  } catch {
+    // macOS falls back to a generic icon.
+  } finally {
+    rmSync(iconset, { recursive: true, force: true });
+  }
+}
+
 function compileHelper() {
   ensureStorageDir();
   mkdirSync(HELPER_DIR, { recursive: true, mode: 0o700 });
+  const tempApp = join(HELPER_DIR, `tlock.${process.pid}.app`);
+  const contents = join(tempApp, "Contents");
   const srcFile = join(HELPER_DIR, `helper.${process.pid}.swift`);
-  const tempBinary = join(HELPER_DIR, `tlock.${process.pid}.tmp`);
-  writeFileSync(srcFile, SE_HELPER_SOURCE, { mode: 0o600 });
   try {
-    execFileSync(BIN.swiftc, ["-o", tempBinary, srcFile], { stdio: "ignore", timeout: 300_000 });
-    chmodSync(tempBinary, 0o700);
-    renameSync(tempBinary, HELPER_BINARY);
+    mkdirSync(join(contents, "MacOS"), { recursive: true });
+    mkdirSync(join(contents, "Resources"), { recursive: true });
+    writeFileSync(join(contents, "Info.plist"), HELPER_INFO_PLIST);
+    writeFileSync(srcFile, SE_HELPER_SOURCE, { mode: 0o600 });
+    execFileSync(BIN.swiftc, ["-o", join(contents, "MacOS", "tlock"), srcFile], { stdio: "ignore", timeout: 300_000 });
+    buildIcon(join(contents, "Resources", "tlock.icns"));
+    try {
+      execFileSync(BIN.codesign, ["--force", "--sign", "-", tempApp], { stdio: "ignore" });
+    } catch {
+      // The linker's ad-hoc signature on the binary still applies.
+    }
+    renameSync(tempApp, HELPER_APP);
   } catch {
-    rmSync(tempBinary, { force: true });
-    return null;
+    rmSync(tempApp, { recursive: true, force: true });
+    return existsSync(HELPER_BINARY) ? HELPER_BINARY : null;
   } finally {
     rmSync(srcFile, { force: true });
   }
