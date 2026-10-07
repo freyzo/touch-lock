@@ -1,48 +1,62 @@
 import { execFileSync } from "child_process";
 import {
   existsSync,
-  readFileSync,
   writeFileSync,
   renameSync,
-  unlinkSync,
+  rmSync,
   chmodSync,
+  openSync,
+  readSync,
+  closeSync,
+  realpathSync,
 } from "fs";
-import { resolve, basename, join } from "path";
+import { resolve, basename, join, delimiter, sep } from "path";
+import { fileURLToPath } from "url";
 import chalk from "chalk";
-import { addEntry, getEntry, removeEntry } from "./config.js";
+import { addEntry, getEntry, removeEntry, canonicalPath } from "./config.js";
 import { authenticate, ensureFirstRunSetup } from "./auth.js";
 import { printKvBox } from "./tui.js";
 
 const ORIGINAL_BINARY_SUFFIX = ".tlock-original";
+const WRAPPER_HEADER = "#!/bin/bash\n# tlock wrapper";
+const TLOCK_SCRIPT = fileURLToPath(new URL("../bin/tlock.js", import.meta.url));
 
 /**
- * Resolve a user-provided app name or path to a full .app bundle path.
- * Checks /Applications first, then treats input as an absolute path.
+ * Resolve an app name or .app path to a bundle path.
+ * A .app path is used as given, falling back to /Applications/<basename>; a bare name maps to /Applications/<name>.app.
  */
 function resolveAppPath(appNameOrPath) {
-  // If it already ends with .app and exists, use it directly
   if (appNameOrPath.endsWith(".app")) {
     const absolutePath = resolve(appNameOrPath);
     if (existsSync(absolutePath)) {
-      return absolutePath;
+      return canonicalPath(absolutePath);
     }
-    // Try /Applications
     const applicationsPath = join("/Applications", basename(absolutePath));
     if (existsSync(applicationsPath)) {
-      return applicationsPath;
+      return canonicalPath(applicationsPath);
     }
     throw new Error(`App not found: ${appNameOrPath}`);
   }
 
-  // Bare name — try /Applications/<Name>.app
   const applicationsPath = join("/Applications", `${appNameOrPath}.app`);
   if (existsSync(applicationsPath)) {
-    return applicationsPath;
+    return canonicalPath(applicationsPath);
   }
 
   throw new Error(
     `App not found: tried /Applications/${appNameOrPath}.app — provide a full path if the app is elsewhere.`
   );
+}
+
+function readPlistKey(plistPath, key) {
+  try {
+    return execFileSync("plutil", ["-extract", key, "raw", "-o", "-", plistPath], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -54,56 +68,108 @@ function getExecutableName(appPath) {
     throw new Error(`No Info.plist found at: ${plistPath}`);
   }
 
-  // Detect Safari Web Apps (PWAs) — they have no binary to lock
-  try {
-    const isTemplate = execFileSync("plutil", [
-      "-extract", "LSTemplateApplication", "raw", "-o", "-", plistPath,
-    ], { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }).trim();
-    if (isTemplate === "true") {
-      throw new Error(
-        `${appPath} is a Safari Web App (PWA) and has no executable.\n` +
-        `  tlock only works with native .app bundles (e.g. GitHub.app, Brave Browser.app).`
-      );
-    }
-  } catch (e) {
-    if (e.message.includes("Safari Web App")) throw e;
-    // LSTemplateApplication not present — that's fine, continue
+  // Safari Web Apps (PWAs) have no binary to lock
+  if (readPlistKey(plistPath, "LSTemplateApplication") === "true") {
+    throw new Error(
+      `${appPath} is a Safari Web App (PWA) and has no executable.\n` +
+      `  tlock only works with native .app bundles (e.g. GitHub.app, Brave Browser.app).`
+    );
   }
 
-  try {
-    const executableName = execFileSync("plutil", [
-      "-extract", "CFBundleExecutable", "raw", "-o", "-", plistPath,
-    ], { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }).trim();
+  const executableName = readPlistKey(plistPath, "CFBundleExecutable");
+  if (!executableName) {
+    throw new Error(`Could not read CFBundleExecutable from ${plistPath}`);
+  }
+  // Comes from the app's own Info.plist, so it must name a file inside Contents/MacOS.
+  if (executableName.includes("/") || executableName === "." || executableName === "..") {
+    throw new Error(`Refusing unusual CFBundleExecutable "${executableName}" in ${plistPath}`);
+  }
+  return executableName;
+}
 
-    if (!executableName) {
-      throw new Error("CFBundleExecutable is empty");
-    }
-    return executableName;
-  } catch (error) {
-    if (error.message.includes("Safari Web App")) throw error;
-    throw new Error(`Could not read CFBundleExecutable from ${plistPath}: ${error.message}`);
+function shellQuote(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Node path that survives upgrades: prefer a PATH entry (e.g. /opt/homebrew/bin/node) over the versioned execPath.
+ */
+function stableNodePath() {
+  const realNode = realpathSync(process.execPath);
+  for (const dir of (process.env.PATH || "").split(delimiter)) {
+    if (!dir.startsWith("/")) continue;
+    const candidate = join(dir, "node");
+    try {
+      if (realpathSync(candidate) === realNode) return candidate;
+    } catch { /* not in this dir */ }
+  }
+  return process.execPath;
+}
+
+/**
+ * Wrapper script that gates app launch behind `tlock auth-gate`.
+ * Uses absolute node and tlock paths because apps launched from Finder get a minimal PATH.
+ */
+function buildWrapperScript(originalBinaryPath) {
+  return [
+    WRAPPER_HEADER + " — do not edit manually",
+    `NODE_BIN=${shellQuote(stableNodePath())}`,
+    `TLOCK_JS=${shellQuote(TLOCK_SCRIPT)}`,
+    `ORIGINAL_BINARY=${shellQuote(originalBinaryPath)}`,
+    "",
+    `if [ ! -x "$NODE_BIN" ] || [ ! -f "$TLOCK_JS" ]; then`,
+    `  osascript -e 'display dialog "tlock could not start: Node.js or tlock has moved. Reinstall tlock, then run tlock on this app again to repair it." buttons {"OK"} default button "OK" with icon stop with title "tlock"'`,
+    `  exit 1`,
+    `fi`,
+    `if "$NODE_BIN" "$TLOCK_JS" auth-gate; then`,
+    `  exec "$ORIGINAL_BINARY" "$@"`,
+    `fi`,
+    `osascript -e 'display dialog "Authentication failed. The app is locked by tlock." buttons {"OK"} default button "OK" with icon stop with title "tlock"'`,
+    `exit 1`,
+    "",
+  ].join("\n");
+}
+
+function isTlockWrapper(binaryPath) {
+  let fd;
+  try {
+    fd = openSync(binaryPath, "r");
+    const header = Buffer.alloc(WRAPPER_HEADER.length);
+    readSync(fd, header, 0, header.length, 0);
+    return header.toString("utf-8") === WRAPPER_HEADER;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
 /**
- * Build the wrapper shell script that gates app launch behind tlock auth.
+ * Atomically put a fresh wrapper at binaryPath. With moveOriginal, the real binary
+ * is moved to renamedBinaryPath first and moved back if anything fails.
  */
-function buildWrapperScript(originalBinaryPath) {
-  const tlockBin = resolve(process.argv[1] || "tlock");
+function installWrapper(binaryPath, renamedBinaryPath, { moveOriginal }) {
+  const tempPath = `${binaryPath}.tlock-tmp`;
+  writeFileSync(tempPath, buildWrapperScript(renamedBinaryPath));
+  chmodSync(tempPath, 0o755);
+  try {
+    if (moveOriginal) renameSync(binaryPath, renamedBinaryPath);
+    try {
+      renameSync(tempPath, binaryPath);
+    } catch (error) {
+      if (moveOriginal) renameSync(renamedBinaryPath, binaryPath);
+      throw error;
+    }
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
+}
 
-  return [
-    "#!/bin/bash",
-    `# tlock wrapper — do not edit manually`,
-    `TLOCK_BIN="${tlockBin}"`,
-    `ORIGINAL_BINARY="${originalBinaryPath}"`,
-    "",
-    `if "$TLOCK_BIN" auth-gate; then`,
-    `  exec "$ORIGINAL_BINARY" "$@"`,
-    `else`,
-    `  osascript -e 'display dialog "Authentication failed. The app is locked by tlock." buttons {"OK"} default button "OK" with icon stop with title "tlock"'`,
-    `  exit 1`,
-    `fi`,
-  ].join("\n");
+function assertPersistentInstall() {
+  if (TLOCK_SCRIPT.includes(`${sep}_npx${sep}`)) {
+    throw new Error("App locking needs a global install (the npx cache is temporary): npm i -g @freyzo/tlock");
+  }
 }
 
 /**
@@ -123,128 +189,132 @@ function validateAppTarget(appPath) {
       "Cannot lock system apps in /System/Applications — SIP (System Integrity Protection) blocks modification."
     );
   }
+}
 
-  const existing = getEntry(appPath);
-  if (existing) {
-    throw new Error(`Already locked: ${appPath}`);
-  }
+function appBinaryPaths(appPath, executableName) {
+  const binaryPath = join(appPath, "Contents", "MacOS", executableName);
+  return { binaryPath, renamedBinaryPath: `${binaryPath}${ORIGINAL_BINARY_SUFFIX}` };
 }
 
 // ─── Public API ─────────────────────────────────────────────────────
 
 /**
- * Lock an app: rename its binary, install a wrapper that requires biometric auth.
+ * Lock an app: move its binary aside and install a wrapper that requires Touch ID or the password.
+ * On an app that is already wrapped, refreshes the wrapper (e.g. after Node or tlock moved).
  */
 export async function lockApp(appNameOrPath) {
   const appPath = resolveAppPath(appNameOrPath);
   validateAppTarget(appPath);
-
-  await ensureFirstRunSetup();
-  await authenticate();
+  assertPersistentInstall();
 
   const executableName = getExecutableName(appPath);
-  const macosDir = join(appPath, "Contents", "MacOS");
-  const binaryPath = join(macosDir, executableName);
-  const renamedBinaryPath = join(macosDir, `${executableName}${ORIGINAL_BINARY_SUFFIX}`);
-
+  const { binaryPath, renamedBinaryPath } = appBinaryPaths(appPath, executableName);
   if (!existsSync(binaryPath)) {
     throw new Error(`Binary not found: ${binaryPath}`);
   }
 
-  // Rename original binary
+  const existing = getEntry(appPath);
+
+  if (isTlockWrapper(binaryPath)) {
+    if (!existsSync(renamedBinaryPath)) {
+      throw new Error(`${binaryPath} is a tlock wrapper but the original binary is missing. Reinstall the app.`);
+    }
+    installWrapper(binaryPath, renamedBinaryPath, { moveOriginal: false });
+    if (!existing) addEntry({ target: appPath, type: "app", executableName });
+    console.log();
+    printKvBox("LOCKED APP", [
+      [chalk.dim("App"), chalk.green(basename(appPath))],
+      [chalk.dim("Note"), chalk.dim("Already locked — wrapper refreshed.")],
+    ]);
+    return;
+  }
+
+  if (existsSync(renamedBinaryPath)) {
+    throw new Error(`Found a leftover ${renamedBinaryPath}. Move or delete it, then retry.`);
+  }
+  if (existing) {
+    // An app update or reinstall replaced the wrapper: re-apply the lock.
+    console.log(chalk.dim("Lock was lost (app updated?) — re-applying."));
+    removeEntry(appPath);
+  }
+
+  await ensureFirstRunSetup();
+  await authenticate();
+
+  addEntry({ target: appPath, type: "app", executableName });
   console.log(
     chalk.dim(`Renaming binary: ${executableName} -> ${executableName}${ORIGINAL_BINARY_SUFFIX}`)
   );
-  renameSync(binaryPath, renamedBinaryPath);
-
-  // Install wrapper script at the original binary path
-  const wrapperContent = buildWrapperScript(renamedBinaryPath);
-  writeFileSync(binaryPath, wrapperContent, { mode: 0o755 });
-
-  addEntry({
-    target: appPath,
-    type: "app",
-    originalPath: appPath,
-    executableName,
-  });
+  try {
+    installWrapper(binaryPath, renamedBinaryPath, { moveOriginal: true });
+  } catch (error) {
+    removeEntry(appPath);
+    throw new Error(
+      `Could not install the lock wrapper (${error.message}).\n  If access was denied, allow your terminal under System Settings > Privacy & Security > App Management.`
+    );
+  }
 
   console.log();
-  printKvBox(
-    "LOCKED APP",
-    [
-      [chalk.dim("App"), chalk.green(basename(appPath))],
-      [chalk.dim("Note"), chalk.dim("Touch ID or password required before launch.")],
-    ],
-    { titleStyle: chalk.cyan }
-  );
+  printKvBox("LOCKED APP", [
+    [chalk.dim("App"), chalk.green(basename(appPath))],
+    [chalk.dim("Note"), chalk.dim("Touch ID or password required before launch.")],
+  ]);
 }
 
 /**
- * Unlock an app: authenticate, then launch the original binary once.
- * The lock remains in place for next launch.
+ * Launch a locked app through LaunchServices; its wrapper asks for Touch ID or the password.
  */
-export async function unlockApp(appNameOrPath) {
-  const appPath = resolveAppPath(appNameOrPath);
-  const entry = getEntry(appPath);
-
-  if (!entry || entry.type !== "app") {
-    throw new Error(`No locked app found for: ${appPath}`);
+export function unlockApp(entry) {
+  const appPath = entry.target;
+  if (!existsSync(appPath)) {
+    throw new Error(`App not found: ${appPath}\n  To forget this lock: tlock remove ${appPath}`);
   }
-
-  await authenticate();
-
-  // Launch the original binary directly
-  const macosDir = join(appPath, "Contents", "MacOS");
-  const renamedBinaryPath = join(macosDir, `${entry.executableName}${ORIGINAL_BINARY_SUFFIX}`);
-
-  if (!existsSync(renamedBinaryPath)) {
-    throw new Error(`Original binary missing: ${renamedBinaryPath}`);
+  const { binaryPath } = appBinaryPaths(appPath, entry.executableName);
+  if (!isTlockWrapper(binaryPath)) {
+    console.log(chalk.yellow(
+      `${basename(appPath)} is no longer locked (app updated?). Run \`tlock ${appPath}\` to lock it again.`
+    ));
   }
 
   console.log();
-  printKvBox(
-    "LAUNCH",
-    [[chalk.dim("App"), chalk.green(basename(appPath))]],
-    { titleStyle: chalk.cyan }
-  );
+  printKvBox("LAUNCH", [
+    [chalk.dim("App"), chalk.green(basename(appPath))],
+    [chalk.dim("Note"), chalk.dim("Authenticate in the tlock prompt.")],
+  ]);
   execFileSync("open", ["-a", appPath], { stdio: "ignore" });
 }
 
 /**
- * Permanently remove app lock: restore original binary, delete wrapper, deregister.
+ * Permanently remove an app lock: put the original binary back and deregister.
+ * Locks with nothing left to restore (app deleted or updated) are just forgotten;
+ * with force, also forgets a wrapped app whose original binary is missing.
  */
-export async function removeApp(appNameOrPath) {
-  const appPath = resolveAppPath(appNameOrPath);
-  const entry = getEntry(appPath);
+export async function removeApp(entry, { force = false } = {}) {
+  const appPath = entry.target;
+  const { binaryPath, renamedBinaryPath } = appBinaryPaths(appPath, entry.executableName);
 
-  if (!entry || entry.type !== "app") {
-    throw new Error(`No locked app found for: ${appPath}`);
+  if (!existsSync(renamedBinaryPath)) {
+    const wrapped = isTlockWrapper(binaryPath);
+    if (wrapped && !force) {
+      throw new Error(
+        `Original binary missing: ${renamedBinaryPath}\n  Reinstall the app, or forget this lock with: tlock remove --force ${appPath}`
+      );
+    }
+    removeEntry(appPath);
+    console.log(chalk.dim(wrapped
+      ? `Forgot the lock for ${basename(appPath)}. Reinstall the app to repair it.`
+      : `Nothing to restore for ${basename(appPath)} (app removed or updated) — removed it from tlock.`));
+    return;
   }
 
   await authenticate();
 
-  const macosDir = join(appPath, "Contents", "MacOS");
-  const binaryPath = join(macosDir, entry.executableName);
-  const renamedBinaryPath = join(macosDir, `${entry.executableName}${ORIGINAL_BINARY_SUFFIX}`);
-
-  if (!existsSync(renamedBinaryPath)) {
-    throw new Error(`Original binary missing: ${renamedBinaryPath} — manual restore may be needed.`);
-  }
-
-  // Remove wrapper, restore original
   console.log(chalk.dim("Restoring original binary..."));
-  unlinkSync(binaryPath);
   renameSync(renamedBinaryPath, binaryPath);
   chmodSync(binaryPath, 0o755);
 
   removeEntry(appPath);
 
   console.log();
-  printKvBox(
-    "UNLOCKED APP",
-    [[chalk.dim("App"), chalk.green(basename(appPath))]],
-    { titleStyle: chalk.cyan }
-  );
+  printKvBox("UNLOCKED APP", [[chalk.dim("App"), chalk.green(basename(appPath))]]);
 }
-
-export default { lockApp, unlockApp, removeApp };

@@ -14,7 +14,7 @@ const B = {
   mm: "┼",
 };
 
-function stripAnsi(s) {
+export function stripAnsi(s) {
   return String(s).replace(/\x1b\[[0-9;]*m/g, "");
 }
 
@@ -35,12 +35,10 @@ function hr(n) {
 /**
  * Key/value panel (boxed header + rows).
  */
-export function printKvBox(title, rows, opts = {}) {
-  const {
-    indent = "  ",
-    border = chalk.green,
-    titleStyle = chalk.cyan,
-  } = opts;
+export function printKvBox(title, rows) {
+  const indent = "  ";
+  const border = chalk.green;
+  const titleStyle = chalk.cyan;
 
   const labelW = Math.max(4, ...rows.map(([a]) => vlen(a)));
   const rowTexts = rows.map(([label, value]) => {
@@ -85,8 +83,9 @@ export function printLockedTargetsTable(entries, formatDate) {
   const indent = "  ";
   const termW = Math.max(60, Math.min(process.stdout.columns || 80, 120));
   const wType = 8;
-  const wWhen = 24;
-  const wPath = Math.max(24, termW - indent.length - wType - wWhen - 8);
+  const wWhen = 16;
+  // Row width = indent + 4 borders + 3 × 2 padding + columns.
+  const wPath = Math.max(24, termW - indent.length - wType - wWhen - 10);
 
   const titleStyle = chalk.cyan;
   const border = chalk.green;
@@ -95,8 +94,8 @@ export function printLockedTargetsTable(entries, formatDate) {
   const trunc = (s, max) => {
     const t = stripAnsi(s);
     if (t.length <= max) return s;
-    const left = Math.max(4, Math.floor(max / 2) - 2);
-    const right = max - left - 3;
+    const left = Math.ceil((max - 1) / 2);
+    const right = max - 1 - left;
     return t.slice(0, left) + "…" + t.slice(-right);
   };
 
@@ -107,7 +106,7 @@ export function printLockedTargetsTable(entries, formatDate) {
 
   const lines = [];
   lines.push(
-    indent + border(B.tl + hr(c1) + B.tm + hr(c2) + B.tm + hr(c3) + B.tr)
+    indent + border(B.tl + hr(titlePad + 2) + B.tr)
   );
   lines.push(
     indent +
@@ -178,8 +177,7 @@ export function printStatusSummary(folderCount, appCount, total) {
       [chalk.dim("Folders"), chalk.green(String(folderCount))],
       [chalk.dim("Apps"), chalk.green(String(appCount))],
       [chalk.dim("Total"), chalk.green(String(total))],
-    ],
-    { titleStyle: chalk.cyan }
+    ]
   );
   console.log();
 }
@@ -189,11 +187,12 @@ export function printStatusSummary(folderCount, appCount, total) {
  */
 export function printEntryStatus(entry, formatDate) {
   const rows = [
+    [chalk.dim("Path"), chalk.green(entry.target)],
     [chalk.dim("Type"), chalk.green(entry.type)],
     [chalk.dim("Locked at"), chalk.green(formatDate(entry.createdAt))],
   ];
   if (entry.dmgPath) {
-    rows.push([chalk.dim("DMG"), chalk.dim(entry.dmgPath)]);
+    rows.push([chalk.dim("Image"), chalk.dim(entry.dmgPath)]);
   }
-  printKvBox("LOCK STATUS", rows, { titleStyle: chalk.cyan });
+  printKvBox("LOCK STATUS", rows);
 }

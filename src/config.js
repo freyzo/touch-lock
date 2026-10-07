@@ -1,40 +1,72 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, openSync, closeSync, unlinkSync, statSync } from "fs";
-import { join } from "path";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  openSync,
+  closeSync,
+  unlinkSync,
+  statSync,
+  renameSync,
+  chmodSync,
+  realpathSync,
+} from "fs";
+import { basename, dirname, join, resolve } from "path";
 import { homedir } from "os";
 
 const TLOCK_DIR = join(homedir(), ".tlock");
 const CONFIG_FILE = join(TLOCK_DIR, "config.json");
 const LOCK_FILE = join(TLOCK_DIR, "config.lock");
-const LOCK_STALE_MS = 10_000;
+const LOCK_STALE_MS = 5_000;
+const LOCK_MAX_WAIT_MS = 10_000;
+const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+
+/**
+ * Create ~/.tlock (owner-only) if needed.
+ */
+export function ensureStorageDir() {
+  mkdirSync(TLOCK_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(TLOCK_DIR, 0o700);
+}
+
+/**
+ * Absolute path with symlinks resolved. For a missing leaf (e.g. a locked folder), resolves its parent.
+ */
+export function canonicalPath(targetPath) {
+  const absolutePath = resolve(targetPath);
+  try {
+    return realpathSync(absolutePath);
+  } catch {
+    try {
+      return join(realpathSync(dirname(absolutePath)), basename(absolutePath));
+    } catch {
+      return absolutePath;
+    }
+  }
+}
 
 function acquireLock() {
-  ensureConfigDirectory();
-  const maxWait = 5_000;
+  ensureStorageDir();
   const start = Date.now();
   while (true) {
     try {
-      const fd = openSync(LOCK_FILE, "wx");
-      closeSync(fd);
+      closeSync(openSync(LOCK_FILE, "wx"));
       return;
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
-      // Check for stale lock
-      try {
-        const st = statSync(LOCK_FILE);
-        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-          unlinkSync(LOCK_FILE);
-          continue;
-        }
-      } catch {
+    }
+    try {
+      if (Date.now() - statSync(LOCK_FILE).mtimeMs > LOCK_STALE_MS) {
+        unlinkSync(LOCK_FILE);
         continue;
       }
-      if (Date.now() - start > maxWait) {
-        throw new Error("Timed out waiting for config lock. Remove ~/.tlock/config.lock if stuck.");
-      }
-      // Busy-wait briefly
-      const deadline = Date.now() + 50;
-      while (Date.now() < deadline) { /* spin */ }
+    } catch {
+      continue;
     }
+    if (Date.now() - start > LOCK_MAX_WAIT_MS) {
+      throw new Error(`Timed out waiting for config lock. Remove ${LOCK_FILE} if stuck.`);
+    }
+    Atomics.wait(sleepCell, 0, 0, 50);
   }
 }
 
@@ -42,38 +74,33 @@ function releaseLock() {
   try { unlinkSync(LOCK_FILE); } catch { /* ignore */ }
 }
 
-function ensureConfigDirectory() {
-  if (!existsSync(TLOCK_DIR)) {
-    mkdirSync(TLOCK_DIR, { recursive: true });
-  }
-}
-
-let _configCache = null;
-
+// Read fresh every time: another tlock process may have changed the file.
 function readConfig() {
-  if (_configCache) return structuredClone(_configCache);
-  ensureConfigDirectory();
   if (!existsSync(CONFIG_FILE)) {
     return { entries: [] };
   }
+  let config;
   try {
-    const rawContent = readFileSync(CONFIG_FILE, "utf-8");
-    _configCache = JSON.parse(rawContent);
-    return structuredClone(_configCache);
-  } catch {
-    return { entries: [] };
+    config = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+  } catch (err) {
+    throw new Error(`Cannot read ${CONFIG_FILE} (${err.message}). Fix it or move it aside; tlock will not overwrite it.`);
   }
+  if (!config || !Array.isArray(config.entries)) {
+    throw new Error(`${CONFIG_FILE} has no "entries" list. Fix it or move it aside; tlock will not overwrite it.`);
+  }
+  return config;
 }
 
 function writeConfig(config) {
-  ensureConfigDirectory();
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o600 });
-  _configCache = structuredClone(config);
+  ensureStorageDir();
+  const tempFile = `${CONFIG_FILE}.${process.pid}.tmp`;
+  writeFileSync(tempFile, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o600 });
+  renameSync(tempFile, CONFIG_FILE);
 }
 
 /**
  * Returns all lock registry entries.
- * Each entry: { target, type, dmgPath?, originalPath, createdAt }
+ * Each entry: { target, type: "folder"|"app", dmgPath? (folder image), executableName? (app), createdAt }
  */
 export function getLockRegistry() {
   return readConfig().entries;
@@ -89,7 +116,7 @@ export function getEntry(targetPath) {
 
 /**
  * Add a new lock entry to the registry.
- * @param {{ target: string, type: "folder"|"app", dmgPath?: string, originalPath: string }} entry
+ * @param {{ target: string, type: "folder"|"app", dmgPath?: string, executableName?: string }} entry
  */
 export function addEntry(entry) {
   acquireLock();
@@ -130,34 +157,6 @@ export function removeEntry(targetPath) {
 }
 
 /**
- * Update fields on an existing entry (merge semantics).
- */
-export function updateEntry(targetPath, updatedFields) {
-  acquireLock();
-  try {
-    const config = readConfig();
-    const entry = config.entries.find((entry) => entry.target === targetPath);
-    if (!entry) {
-      throw new Error(`No lock entry found for: ${targetPath}`);
-    }
-    Object.assign(entry, updatedFields);
-    writeConfig(config);
-    return entry;
-  } finally {
-    releaseLock();
-  }
-}
-
-/**
- * Path to the ~/.tlock directory (exposed for DMG storage).
+ * Path to the ~/.tlock directory (encrypted images, helper, registry).
  */
 export const TLOCK_STORAGE_DIR = TLOCK_DIR;
-
-export default {
-  getLockRegistry,
-  getEntry,
-  addEntry,
-  removeEntry,
-  updateEntry,
-  TLOCK_STORAGE_DIR,
-};

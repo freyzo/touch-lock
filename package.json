@@ -9,11 +9,9 @@
   "bin": {
     "tlock": "bin/tlock.js"
   },
-  "main": "src/index.js",
   "scripts": {
     "start": "node bin/tlock.js",
-    "test:pen": "bash tests/lock-pen-test.sh",
-    "postinstall": "[ \"$npm_config_global\" = \"true\" ] && node bin/tlock.js || true"
+    "test:pen": "bash tests/lock-pen-test.sh"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -43,14 +41,13 @@
   "files": [
     "bin/",
     "src/",
-    "assets/",
+    "assets/tlock-logo.webp",
     "README.md"
   ],
   "dependencies": {
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "figlet": "^1.7.0",
-    "gradient-string": "^2.0.2",
     "ora": "^8.1.0"
   }
 }

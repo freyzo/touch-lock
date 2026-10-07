@@ -1,36 +1,87 @@
 import { execFileSync, spawn } from "child_process";
-import { existsSync, statSync, rmSync, mkdirSync, chmodSync, realpathSync, lstatSync } from "fs";
-import { resolve, basename } from "path";
+import {
+  existsSync,
+  statSync,
+  rmSync,
+  rmdirSync,
+  mkdirSync,
+  mkdtempSync,
+  chmodSync,
+  lstatSync,
+  readdirSync,
+} from "fs";
+import { basename, dirname, join, resolve, sep } from "path";
 import { createHash } from "crypto";
 import chalk from "chalk";
 import ora from "ora";
-import { addEntry, getEntry, removeEntry, TLOCK_STORAGE_DIR } from "./config.js";
+import {
+  addEntry,
+  getEntry,
+  getLockRegistry,
+  removeEntry,
+  canonicalPath,
+  ensureStorageDir,
+  TLOCK_STORAGE_DIR,
+} from "./config.js";
 import { authenticate, getKeychainPassword, ensureFirstRunSetup } from "./auth.js";
 import { printKvBox } from "./tui.js";
 
+// Sparse image: only the space actually used is stored on disk.
+const IMAGE_MAX_SIZE = "1t";
+const VOLUME_METADATA = new Set([
+  ".fseventsd",
+  ".Spotlight-V100",
+  ".Trashes",
+  ".TemporaryItems",
+  ".DocumentRevisions-V100",
+]);
+const STALE_MOUNT_DIR_MS = 60 * 60 * 1000;
+
 /**
- * Generate a deterministic DMG filename from the folder path.
+ * Deterministic image filename for a folder path.
  */
-function generateDmgPath(folderPath) {
+function generateImagePath(folderPath) {
   const hash = createHash("sha256").update(folderPath).digest("hex").slice(0, 12);
-  const name = basename(folderPath);
-  return resolve(TLOCK_STORAGE_DIR, `${name}-${hash}.dmg`);
+  return join(TLOCK_STORAGE_DIR, `${basename(folderPath)}-${hash}.sparseimage`);
+}
+
+function isInside(child, parent) {
+  return child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
+}
+
+function isMountPoint(targetPath) {
+  try {
+    return statSync(targetPath).dev !== statSync(dirname(targetPath)).dev;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Validate that the target is a real, lockable directory.
+ * Validate that a new lock target is a plain directory that is safe to encrypt and then delete.
  */
 function validateFolderTarget(folderPath) {
   if (!existsSync(folderPath)) {
     throw new Error(`Path does not exist: ${folderPath}`);
   }
-  const stats = statSync(folderPath);
-  if (!stats.isDirectory()) {
+  if (!statSync(folderPath).isDirectory()) {
     throw new Error(`Not a directory: ${folderPath}`);
   }
-  const existing = getEntry(folderPath);
-  if (existing) {
-    throw new Error(`Already locked: ${folderPath}`);
+  const storageDir = canonicalPath(TLOCK_STORAGE_DIR);
+  if (folderPath === storageDir || isInside(storageDir, folderPath) || isInside(folderPath, storageDir)) {
+    throw new Error(`Refusing to lock ${folderPath}: it is or contains tlock's storage (${storageDir}).`);
+  }
+  if (isMountPoint(folderPath)) {
+    throw new Error(`Refusing to lock ${folderPath}: it is a mounted volume. Lock a folder on it instead.`);
+  }
+  for (const entry of getLockRegistry()) {
+    if (entry.type !== "folder") continue;
+    if (isInside(entry.target, folderPath)) {
+      throw new Error(`Refusing to lock ${folderPath}: it contains locked folder ${entry.target}. Remove that lock first.`);
+    }
+    if (isInside(folderPath, entry.target)) {
+      throw new Error(`Refusing to lock ${folderPath}: it is inside locked folder ${entry.target}.`);
+    }
   }
 }
 
@@ -39,281 +90,318 @@ function sanitizeVolumeName(name) {
   return sanitized || "tlock-volume";
 }
 
-/**
- * Create an AES-256 encrypted DMG from a folder.
- * Pipes the master password into hdiutil via stdin.
- */
-function createEncryptedDmg(folderPath, dmgPath, password) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const hdiutilProcess = spawn("hdiutil", [
-      "create",
-      "-encryption", "AES-256",
-      "-stdinpass",
-      "-volname", sanitizeVolumeName(basename(folderPath)),
-      "-srcfolder", folderPath,
-      "-ov",
-      "-format", "UDZO",
-      dmgPath,
-    ], { stdio: ["pipe", "pipe", "pipe"] });
+function requirePassword() {
+  const password = getKeychainPassword();
+  if (!password) {
+    throw new Error("Could not read the tlock master password from Keychain.");
+  }
+  return password;
+}
 
-    let stderrOutput = "";
-
-    hdiutilProcess.stderr.on("data", (chunk) => {
-      stderrOutput += chunk.toString();
-    });
-
-    // Pipe password into stdin
-    hdiutilProcess.stdin.write(password);
-    hdiutilProcess.stdin.end();
-
-    hdiutilProcess.on("close", (exitCode) => {
-      if (exitCode !== 0) {
-        rejectPromise(new Error(`hdiutil create failed (exit ${exitCode}): ${stderrOutput}`));
-      } else {
-        resolvePromise();
-      }
-    });
-
-    hdiutilProcess.on("error", (error) => {
-      rejectPromise(new Error(`Failed to spawn hdiutil: ${error.message}`));
-    });
-  });
+function commandError(error) {
+  return String(error.stderr || "").trim() || error.message;
 }
 
 /**
- * Mount an encrypted DMG at the original folder path.
- * Pipes password via stdin.
+ * Run hdiutil with the password piped to stdin (-stdinpass).
  */
-function mountDmg(dmgPath, mountPoint, password) {
+function runHdiutil(args, password) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const hdiutilProcess = spawn("hdiutil", [
-      "attach",
-      dmgPath,
-      "-stdinpass",
-      "-mountpoint", mountPoint,
-      "-nobrowse",
-    ], { stdio: ["pipe", "pipe", "pipe"] });
+    const hdiutilProcess = spawn("hdiutil", args, { stdio: ["pipe", "ignore", "pipe"] });
 
     let stderrOutput = "";
-
     hdiutilProcess.stderr.on("data", (chunk) => {
       stderrOutput += chunk.toString();
     });
+    // hdiutil may exit before reading the password; its exit code reports why.
+    hdiutilProcess.stdin.on("error", () => {});
 
-    hdiutilProcess.stdin.write(password);
-    hdiutilProcess.stdin.end();
-
+    hdiutilProcess.on("error", (error) => {
+      rejectPromise(new Error(`Failed to run hdiutil: ${error.message}`));
+    });
     hdiutilProcess.on("close", (exitCode) => {
-      if (exitCode !== 0) {
-        rejectPromise(new Error(`hdiutil attach failed (exit ${exitCode}): ${stderrOutput}`));
-      } else {
+      if (exitCode === 0) {
         resolvePromise();
+      } else {
+        rejectPromise(new Error(`hdiutil ${args[0]} failed (exit ${exitCode}): ${stderrOutput.trim()}`));
       }
     });
 
-    hdiutilProcess.on("error", (error) => {
-      rejectPromise(new Error(`Failed to spawn hdiutil: ${error.message}`));
-    });
+    hdiutilProcess.stdin.end(password);
   });
 }
 
+function attachImage(imagePath, mountPoint, password, { browse = false, readonly = false } = {}) {
+  const args = ["attach", imagePath, "-stdinpass", "-mountpoint", mountPoint];
+  if (!browse) args.push("-nobrowse");
+  if (readonly) args.push("-readonly");
+  return runHdiutil(args, password);
+}
+
 /**
- * Unmount (eject) a mounted DMG volume.
+ * Eject a mounted volume. Without force, refuses while files on it are in use.
  */
-function unmountDmg(mountPoint) {
+function detach(mountPoint, { force = false } = {}) {
   try {
-    execFileSync("hdiutil", ["detach", mountPoint, "-force"], { stdio: "ignore" });
-  } catch {
-    throw new Error(`Failed to unmount volume at: ${mountPoint}`);
+    execFileSync("hdiutil", ["detach", mountPoint, ...(force ? ["-force"] : [])], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+  } catch (error) {
+    const hint = force ? "" : "\n  Close any files or apps using it, then retry.";
+    throw new Error(`Could not eject ${mountPoint}: ${commandError(error)}${hint}`);
+  }
+}
+
+// rmdir never deletes contents, so a still-mounted volume is left intact.
+function removeEmptyDir(dirPath) {
+  try { rmdirSync(dirPath); } catch { /* not empty, still mounted, or already gone */ }
+}
+
+/**
+ * Fresh temp mount point under ~/.tlock; also clears empty ones left by interrupted runs.
+ */
+function makeTempMountDir() {
+  ensureStorageDir();
+  for (const name of readdirSync(TLOCK_STORAGE_DIR)) {
+    if (!name.startsWith("mount-")) continue;
+    const dirPath = join(TLOCK_STORAGE_DIR, name);
+    try {
+      if (Date.now() - statSync(dirPath).mtimeMs > STALE_MOUNT_DIR_MS) removeEmptyDir(dirPath);
+    } catch { /* ignore */ }
+  }
+  return mkdtempSync(join(TLOCK_STORAGE_DIR, "mount-"));
+}
+
+function copyOutOfVolume(volumePath, destination) {
+  for (const name of readdirSync(volumePath)) {
+    if (VOLUME_METADATA.has(name)) continue;
+    try {
+      execFileSync("ditto", [join(volumePath, name), join(destination, name)], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+    } catch (error) {
+      throw new Error(`Copying ${name} failed: ${commandError(error)}`);
+    }
   }
 }
 
 /**
- * Eject if this path is a volume mount (no-op if not mounted).
- * Needed before a second `hdiutil attach` of the same DMG (e.g. after `unlock`).
+ * Create an AES-256 encrypted, writable APFS sparse image and copy the folder into it.
  */
-function detachIfMounted(mountPoint) {
-  if (!existsSync(mountPoint)) return;
+async function createEncryptedImage(folderPath, imagePath, password) {
+  ensureStorageDir();
+  await runHdiutil([
+    "create",
+    "-size", IMAGE_MAX_SIZE,
+    "-type", "SPARSE",
+    "-fs", "APFS",
+    "-encryption", "AES-256",
+    "-stdinpass",
+    "-volname", sanitizeVolumeName(basename(folderPath)),
+    imagePath,
+  ], password);
+
+  const mountPoint = makeTempMountDir();
   try {
-    execFileSync("hdiutil", ["detach", mountPoint, "-force"], { stdio: "ignore" });
-  } catch {
-    /* not a mount or already ejected */
+    await attachImage(imagePath, mountPoint, password);
+    let copyError = null;
+    try {
+      execFileSync("ditto", [folderPath, mountPoint], { stdio: ["ignore", "ignore", "pipe"] });
+    } catch (error) {
+      copyError = new Error(`Copying into the encrypted volume failed: ${commandError(error)}`);
+    }
+    try {
+      detach(mountPoint, { force: true });
+    } catch (error) {
+      throw copyError || error;
+    }
+    if (copyError) throw copyError;
+  } catch (error) {
+    rmSync(imagePath, { force: true });
+    throw error;
+  } finally {
+    removeEmptyDir(mountPoint);
   }
+}
+
+/**
+ * Put an unlocked folder away again by ejecting its volume.
+ */
+function relockFolder(entry) {
+  if (!isMountPoint(entry.target)) {
+    throw new Error(`Already locked: ${entry.target}\n  Open it with: tlock unlock ${entry.target}`);
+  }
+  detach(entry.target);
+  removeEmptyDir(entry.target);
+
+  console.log();
+  printKvBox("LOCKED FOLDER", [
+    [chalk.dim("Path"), chalk.green(entry.target)],
+    [chalk.dim("Image"), chalk.dim(entry.dmgPath)],
+  ]);
 }
 
 // ─── Public API ─────────────────────────────────────────────────────
 
 /**
- * Lock a folder: create encrypted DMG, remove original, register in config.
+ * Lock a folder: encrypt it into a sparse image, register it, then delete the original.
+ * On a registered folder that is currently unlocked, eject it instead.
  */
 export async function lockFolder(folderPath) {
   const rawPath = resolve(folderPath);
 
   if (existsSync(rawPath) && lstatSync(rawPath).isSymbolicLink()) {
-    const realTarget = realpathSync(rawPath);
     throw new Error(
-      `Refusing to lock a symlink. "${rawPath}" points to "${realTarget}". Lock the real path instead.`
+      `Refusing to lock a symlink. "${rawPath}" points to "${canonicalPath(rawPath)}". Lock the real path instead.`
     );
   }
 
-  const absolutePath = existsSync(rawPath) ? realpathSync(rawPath) : rawPath;
+  const absolutePath = canonicalPath(rawPath);
+  const existing = getEntry(absolutePath);
+  if (existing) {
+    relockFolder(existing);
+    return;
+  }
+
   validateFolderTarget(absolutePath);
+  const imagePath = generateImagePath(absolutePath);
+  if (existsSync(imagePath)) {
+    throw new Error(
+      `An encrypted image for this folder already exists: ${imagePath}\n  It may hold an earlier lock of this folder. Move it aside, then retry.`
+    );
+  }
 
   await ensureFirstRunSetup();
   await authenticate();
-
-  const dmgPath = generateDmgPath(absolutePath);
-  const password = getKeychainPassword();
+  const password = requirePassword();
 
   const spinner = ora({
     text: chalk.dim(`Encrypting ${basename(absolutePath)}...`),
     color: "yellow",
     spinner: "dots",
   }).start();
-
   try {
-    await createEncryptedDmg(absolutePath, dmgPath, password);
-  } catch (err) {
+    await createEncryptedImage(absolutePath, imagePath, password);
+  } finally {
     spinner.stop();
-    console.error(chalk.red(`Encryption failed: ${err.message}`));
-    throw err;
   }
-
-  if (!existsSync(dmgPath)) {
-    spinner.stop();
-    console.error(chalk.red("DMG not found after creation — aborting to protect data."));
-    throw new Error("DMG creation succeeded but file not found — aborting to protect data.");
-  }
-  chmodSync(dmgPath, 0o600);
-  spinner.stop();
+  chmodSync(imagePath, 0o600);
   console.log(chalk.green("  Encrypted volume created"));
 
+  // Register before deleting anything, so the data is never unreachable through tlock.
+  try {
+    addEntry({ target: absolutePath, type: "folder", dmgPath: imagePath });
+  } catch (error) {
+    rmSync(imagePath, { force: true });
+    throw error;
+  }
+
   const rmSpinner = ora({ text: chalk.dim("Removing original folder..."), color: "yellow", spinner: "dots" }).start();
-  rmSync(absolutePath, { recursive: true, force: true });
-  rmSpinner.stop();
+  try {
+    rmSync(absolutePath, { recursive: true, force: true });
+  } catch (error) {
+    throw new Error(
+      `Your data is encrypted and registered, but the original folder could not be fully deleted (${error.message}). Delete what is left of ${absolutePath} by hand.`
+    );
+  } finally {
+    rmSpinner.stop();
+  }
   console.log(chalk.dim("  Original folder removed"));
 
-  addEntry({
-    target: absolutePath,
-    type: "folder",
-    dmgPath,
-    originalPath: absolutePath,
-  });
-
   console.log();
-  printKvBox(
-    "LOCKED FOLDER",
-    [
-      [chalk.dim("Path"), chalk.green(absolutePath)],
-      [chalk.dim("DMG"), chalk.dim(dmgPath)],
-    ],
-    { titleStyle: chalk.cyan }
-  );
+  printKvBox("LOCKED FOLDER", [
+    [chalk.dim("Path"), chalk.green(absolutePath)],
+    [chalk.dim("Image"), chalk.dim(imagePath)],
+  ]);
 }
 
 /**
- * Unlock a folder: authenticate, then mount the DMG at the original path.
+ * Unlock a folder: authenticate, then mount its image at the original path.
  */
-export async function unlockFolder(folderPath) {
-  const absolutePath = resolve(folderPath);
-  const entry = getEntry(absolutePath);
-
-  if (!entry || entry.type !== "folder") {
-    throw new Error(`No locked folder found for: ${absolutePath}`);
-  }
+export async function unlockFolder(entry) {
+  const absolutePath = entry.target;
 
   if (!existsSync(entry.dmgPath)) {
-    throw new Error(`DMG file missing: ${entry.dmgPath}`);
+    throw new Error(`Encrypted image missing: ${entry.dmgPath}`);
+  }
+  if (isMountPoint(absolutePath)) {
+    console.log(chalk.dim(`Already unlocked: ${absolutePath}`));
+    return;
   }
 
   await authenticate();
+  const password = requirePassword();
 
-  const password = getKeychainPassword();
   const spinner = ora({ text: chalk.dim("Mounting encrypted volume..."), color: "yellow", spinner: "dots" }).start();
   try {
-    await mountDmg(entry.dmgPath, absolutePath, password);
-  } catch (err) {
+    await attachImage(entry.dmgPath, absolutePath, password, { browse: true });
+  } finally {
     spinner.stop();
-    console.error(chalk.red(`Mount failed: ${err.message}`));
-    throw err;
   }
-  spinner.stop();
   console.log(chalk.green("  Volume mounted"));
 
   console.log();
-  printKvBox(
-    "UNLOCKED FOLDER",
-    [[chalk.dim("Path"), chalk.green(absolutePath)]],
-    { titleStyle: chalk.cyan }
-  );
-  console.log(
-    chalk.dim(
-      "  When done: eject this volume in Finder (or Disk Utility). Data stays in the encrypted .dmg — run `tlock unlock` again next time. To drop tlock and get a normal folder: `tlock remove <path>`."
-    )
-  );
+  printKvBox("UNLOCKED FOLDER", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
+  if (entry.dmgPath.endsWith(".dmg")) {
+    console.log(chalk.yellow(
+      `  This lock was made by an older tlock and opens read-only. To make it writable: tlock remove ${absolutePath}, then tlock ${absolutePath}.`
+    ));
+  }
+  console.log(chalk.dim(
+    `  When done, lock it again with \`tlock ${absolutePath}\` (or eject it in Finder). To get a normal folder back: \`tlock remove ${absolutePath}\`.`
+  ));
 }
 
 /**
- * Permanently remove a folder lock: mount, copy contents out, delete DMG, deregister.
+ * Permanently remove a folder lock: copy contents back to the original path, delete the image, deregister.
+ * With force, only forgets a lock whose image is missing.
  */
-export async function removeFolder(folderPath) {
-  const absolutePath = resolve(folderPath);
-  const entry = getEntry(absolutePath);
-
-  if (!entry || entry.type !== "folder") {
-    throw new Error(`No locked folder found for: ${absolutePath}`);
-  }
+export async function removeFolder(entry, { force = false } = {}) {
+  const absolutePath = entry.target;
 
   if (!existsSync(entry.dmgPath)) {
-    throw new Error(`DMG file missing: ${entry.dmgPath}`);
+    if (!force) {
+      throw new Error(
+        `Encrypted image missing: ${entry.dmgPath}\n  If you moved it, put it back. To forget this lock anyway: tlock remove --force ${absolutePath}`
+      );
+    }
+    removeEntry(absolutePath);
+    console.log(chalk.dim(`Forgot the lock for ${absolutePath}.`));
+    return;
   }
 
   await authenticate();
+  const password = requirePassword();
 
-  const password = getKeychainPassword();
-  const tempMountPoint = resolve(TLOCK_STORAGE_DIR, `mount-${Date.now()}`);
+  // A volume left open by `tlock unlock` must be ejected before the image can be attached again.
+  if (isMountPoint(absolutePath)) detach(absolutePath);
+  mkdirSync(absolutePath, { recursive: true });
 
-  // Same DMG may already be mounted at absolutePath from a prior `unlock` — second attach fails with "Resource busy"
-  detachIfMounted(absolutePath);
-
-  mkdirSync(tempMountPoint, { recursive: true });
-  if (!existsSync(absolutePath)) {
-    mkdirSync(absolutePath, { recursive: true });
-  }
-
-  // Mount to a temp location
+  const mountPoint = makeTempMountDir();
   const spinner = ora({ text: chalk.dim("Restoring contents..."), color: "yellow", spinner: "dots" }).start();
   try {
-    await mountDmg(entry.dmgPath, tempMountPoint, password);
-  } catch (err) {
-    spinner.stop();
-    console.error(chalk.red(`Mount failed: ${err.message}`));
-    throw err;
-  }
-
-  try {
-    execFileSync("cp", ["-R", `${tempMountPoint}/`, absolutePath], { stdio: "ignore" });
-    spinner.stop();
-    console.log(chalk.green("  Contents restored"));
-  } catch (err) {
-    spinner.stop();
-    console.error(chalk.red(`Restore failed: ${err.message}`));
-    throw err;
+    await attachImage(entry.dmgPath, mountPoint, password, { readonly: true });
+    let copyError = null;
+    try {
+      copyOutOfVolume(mountPoint, absolutePath);
+    } catch (error) {
+      copyError = error;
+    }
+    try {
+      detach(mountPoint, { force: true });
+    } catch (error) {
+      if (!copyError) throw error;
+    }
+    if (copyError) throw new Error(`Restore failed: ${copyError.message}`);
   } finally {
-    try { unmountDmg(tempMountPoint); } catch { /* best effort */ }
-    rmSync(tempMountPoint, { recursive: true, force: true });
+    spinner.stop();
+    removeEmptyDir(mountPoint);
   }
+  console.log(chalk.green("  Contents restored"));
 
-  // Clean up DMG and registry
   rmSync(entry.dmgPath, { force: true });
   removeEntry(absolutePath);
 
   console.log();
-  printKvBox(
-    "RESTORED",
-    [[chalk.dim("Path"), chalk.green(absolutePath)]],
-    { titleStyle: chalk.cyan }
-  );
+  printKvBox("RESTORED", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
 }
-
-export default { lockFolder, unlockFolder, removeFolder };

@@ -2,61 +2,53 @@
 
 import { Command } from "commander";
 import chalk from "chalk";
-import { platform } from "os";
-import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
 import figlet from "figlet";
+import { platform } from "os";
+import { readFileSync, existsSync, statSync } from "fs";
+import { fileURLToPath } from "url";
+import { basename, dirname, join, resolve } from "path";
+import { lockFolder, unlockFolder, removeFolder } from "../src/lock-folder.js";
+import { lockApp, unlockApp, removeApp } from "../src/lock-app.js";
+import { authenticate } from "../src/auth.js";
+import { getLockRegistry, getEntry, canonicalPath } from "../src/config.js";
+import {
+  printLockedTargetsTable,
+  printStatusSummary,
+  printEntryStatus,
+  stripAnsi,
+} from "../src/tui.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VERSION = JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf-8")).version;
 
 // ─── Shared color helpers ────────────────────────────────────────────
-const terra = (s) => `\x1b[38;5;166m${s}\x1b[0m`;
+const terra  = chalk.ansi256(166);
+const blue   = chalk.ansi256(33);
+const blueLt = chalk.ansi256(75);
 
 // Blue gradient matching #176be8: dark navy → royal blue → sky blue
 // xterm-256: 18=#000087  19=#0000af  26=#005fd7  27=#005fff  33=#0087ff  75=#5fafff
 const BLUE_STOPS = [18, 19, 26, 27, 33, 33, 75];
 
 // Red for O: #de2158 ≈ xterm 161 (#d7005f)
-const redO = (s) => `\x1b[38;5;161m${s}\x1b[0m`;
+const redO = chalk.ansi256(161);
 
 function gradientLine(str) {
   const chars = str.split("");
   const total = chars.length || 1;
   return chars.map((ch, i) => {
     const idx = BLUE_STOPS[Math.round((i / (total - 1 || 1)) * (BLUE_STOPS.length - 1))];
-    return `\x1b[38;5;${idx}m${ch}\x1b[0m`;
+    return chalk.ansi256(idx)(ch);
   }).join("");
 }
 
-/** Big ASCII banner only for top-level help — not for list/status/version/lock/etc. */
-function shouldPrintBanner() {
-  const argv = process.argv.slice(2);
-  if (argv.length === 0) return true;
-  if (argv.includes("auth-gate")) return false;
-  if (argv.includes("-V") || argv.includes("--version")) return false;
-  const subcommands = new Set(["unlock", "list", "remove", "status"]);
-  const first = argv[0];
-  if (first && subcommands.has(first)) return false;
-  if (first && !first.startsWith("-")) return false;
-  if (argv.includes("-u") || argv.includes("--unlock") || argv.includes("-r") || argv.includes("--remove")) {
-    return false;
-  }
-  return argv.includes("-h") || argv.includes("--help");
-}
-
+/** Big ASCII banner only for a bare `tlock` and --help/-h. */
 function shouldShowBanner() {
-  const args = process.argv.slice(2).filter(a => !a.startsWith("--") || a === "--help" || a === "--version");
-  if (process.argv.includes("auth-gate")) return false;
-  // Show only on: no args, --help/-h, --version/-V
-  const raw = process.argv.slice(2);
-  if (raw.length === 0) return true;
-  if (raw.some(a => a === "--help" || a === "-h" || a === "--version" || a === "-V")) return true;
-  return false;
+  const argv = process.argv.slice(2);
+  return argv.length === 0 || argv.includes("--help") || argv.includes("-h");
 }
 
-async function printBanner() {
+function printBanner() {
   try {
     const font = "ANSI Shadow";
     const rc   = (ch) => figlet.textSync(ch, { font }).split("\n").slice(0, -1);
@@ -91,35 +83,23 @@ async function printBanner() {
       groups.map(({ lines, color }) => color(lines[i] || "")).join("")
     );
 
-    const rawWidth    = artLines[0].replace(/\x1b\[[0-9;]*m/g, "").length;
+    const rawWidth    = stripAnsi(artLines[0]).length;
     const subtitleRaw = `made by freyzo  v${VERSION}`;
     const width       = Math.max(rawWidth, subtitleRaw.length) + 2;
-    const blueAnsi    = (s) => `\x1b[38;5;33m${s}\x1b[0m`;
-    const dash        = blueAnsi("─");
+    const dash        = blue("─");
 
     console.log("");
-    console.log("  " + blueAnsi("┌") + dash.repeat(width) + blueAnsi("┐"));
+    console.log("  " + blue("┌") + dash.repeat(width) + blue("┐"));
     for (const line of artLines) {
       console.log("     " + line);
     }
-    console.log("     " + chalk.dim("made by freyzo  ") + blueAnsi(`v${VERSION}`));
-    console.log("  " + blueAnsi("└") + dash.repeat(width) + blueAnsi("┘"));
+    console.log("     " + chalk.dim("made by freyzo  ") + blue(`v${VERSION}`));
+    console.log("  " + blue("└") + dash.repeat(width) + blue("┘"));
     console.log("");
   } catch {
-    // deps missing — skip silently
+    // The banner is decorative; never let a figlet error block the CLI.
   }
 }
-import { resolve, basename } from "path";
-import { existsSync, statSync } from "fs";
-import { lockFolder, unlockFolder, removeFolder } from "../src/lock-folder.js";
-import { lockApp, unlockApp, removeApp } from "../src/lock-app.js";
-import { authenticate } from "../src/auth.js";
-import { getLockRegistry, getEntry } from "../src/config.js";
-import {
-  printLockedTargetsTable,
-  printStatusSummary,
-  printEntryStatus,
-} from "../src/tui.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -131,45 +111,71 @@ function enforceMaxOSPlatform() {
 }
 
 /**
- * Find registry entry for a user-supplied target (full path, cwd-relative, or folder basename).
+ * Find the registry entry for a user-supplied target: a path (symlinks resolved),
+ * an app name in /Applications, or, for a bare name only, a unique basename match.
  */
-function findEntryForTarget(target) {
-  const candidates = [
-    resolve(target),
-    `/Applications/${target}.app`,
-  ];
-  for (const p of candidates) {
-    const entry = getEntry(p);
-    if (entry) return entry;
-  }
-  const base = basename(target.replace(/\/$/, ""));
-  const entries = getLockRegistry();
-  const byBase = entries.filter((e) => basename(e.target) === base);
-  if (byBase.length > 1) {
+function findEntryForTarget(target, command) {
+  const exact = getEntry(canonicalPath(target)) || getEntry(`/Applications/${target}.app`);
+  if (exact) return exact;
+  if (target.includes("/")) return null;
+
+  const matches = getLockRegistry().filter((e) => basename(e.target) === target);
+  if (matches.length > 1) {
     throw new Error(
-      `Multiple locks named "${base}". Use full path. Try:\n  ${byBase.map((e) => `tlock unlock ${e.target}`).join("\n  ")}`
+      `Multiple locks named "${target}". Use the full path:\n  ${matches.map((e) => `tlock ${command} ${e.target}`).join("\n  ")}`
     );
   }
-  if (byBase.length === 1) return byBase[0];
+  if (matches.length === 1) {
+    console.log(chalk.dim(`Using lock: ${matches[0].target}`));
+    return matches[0];
+  }
   return null;
 }
 
 /**
- * Detect whether a target is a folder or an app bundle.
+ * Detect whether a lock target is a folder or an app bundle.
  * Returns "folder" | "app" | "unknown".
  */
-
 function detectTargetType(target) {
+  const registered = getEntry(canonicalPath(target));
+  if (registered) return registered.type;
   if (target.endsWith(".app")) return "app";
-  // Bare name — check if it resolves to an app in /Applications
-  if (existsSync(`/Applications/${target}.app`)) return "app";
-  // Check registry for previously locked target
-  const entry = findEntryForTarget(target);
+
   const absolutePath = resolve(target);
-  if (entry) return entry.type;
-  // Check filesystem
-  if (existsSync(absolutePath) && statSync(absolutePath).isDirectory()) return "folder";
+  const isFolder = existsSync(absolutePath) && statSync(absolutePath).isDirectory();
+  const isApp = !target.includes("/") && existsSync(`/Applications/${target}.app`);
+  if (isFolder && isApp) {
+    throw new Error(
+      `"${target}" matches both ./${target} and /Applications/${target}.app. Use ./${target} for the folder or ${target}.app for the app.`
+    );
+  }
+  if (isApp) return "app";
+  if (isFolder) return "folder";
   return "unknown";
+}
+
+async function runUnlock(target) {
+  const entry = findEntryForTarget(target, "unlock");
+  if (!entry) {
+    throw new Error(`No lock found for: ${target}`);
+  }
+  if (entry.type === "folder") {
+    await unlockFolder(entry);
+  } else {
+    unlockApp(entry);
+  }
+}
+
+async function runRemove(target, { force = false } = {}) {
+  const entry = findEntryForTarget(target, "remove");
+  if (!entry) {
+    throw new Error(`No lock found for: ${target}`);
+  }
+  if (entry.type === "folder") {
+    await removeFolder(entry, { force });
+  } else {
+    await removeApp(entry, { force });
+  }
 }
 
 /**
@@ -187,18 +193,17 @@ function withErrorHandling(asyncAction) {
 }
 
 /**
- * Format a date string for display.
+ * Compact local timestamp, e.g. 2026-10-07 14:05.
  */
 function formatDate(isoString) {
-  return new Date(isoString).toLocaleString();
+  const date = new Date(isoString);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // ─── CLI ────────────────────────────────────────────────────────────
 
 const program = new Command();
-
-const blue    = (s) => `\x1b[38;5;33m${s}\x1b[0m`;
-const blueLt  = (s) => `\x1b[38;5;75m${s}\x1b[0m`;
 
 program.configureHelp({
   styleTitle:           (s) => blue(s),
@@ -219,37 +224,19 @@ program
 
 // Default command: lock a target
 program
-  .argument("[target]", "folder path or app name to lock")
+  .argument("[target]", "folder path or app name to lock (run again on an unlocked folder to lock it)")
   .action(
     withErrorHandling(async (target) => {
       const options = program.opts();
       if (options.unlock && options.remove) {
         throw new Error("Use either --unlock/-u or --remove/-r, not both.");
       }
-
       if (options.unlock) {
-        const entry = findEntryForTarget(options.unlock);
-        if (!entry) {
-          throw new Error(`No lock found for: ${options.unlock}`);
-        }
-        if (entry.type === "folder") {
-          await unlockFolder(entry.target);
-        } else {
-          await unlockApp(entry.target);
-        }
+        await runUnlock(options.unlock);
         return;
       }
-
       if (options.remove) {
-        const entry = findEntryForTarget(options.remove);
-        if (!entry) {
-          throw new Error(`No lock found for: ${options.remove}`);
-        }
-        if (entry.type === "folder") {
-          await removeFolder(entry.target);
-        } else {
-          await removeApp(entry.target);
-        }
+        await runRemove(options.remove);
         return;
       }
 
@@ -269,25 +256,13 @@ program
         );
       }
     })
-);
+  );
 
 // unlock
 program
   .command("unlock <target>")
-  .description("Unlock a previously locked folder or app")
-  .action(
-    withErrorHandling(async (target) => {
-      const entry = findEntryForTarget(target);
-      if (!entry) {
-        throw new Error(`No lock found for: ${target}`);
-      }
-      if (entry.type === "folder") {
-        await unlockFolder(entry.target);
-      } else {
-        await unlockApp(entry.target);
-  }
-    })
-);
+  .description("Unlock a locked folder, or launch a locked app")
+  .action(withErrorHandling((target) => runUnlock(target)));
 
 // list
 program
@@ -300,33 +275,21 @@ program
         console.log("\n  " + chalk.dim("No locked targets.") + "\n");
         return;
       }
-
       printLockedTargetsTable(entries, formatDate);
-  })
-);
+    })
+  );
 
 // remove
 program
   .command("remove <target>")
   .description("Permanently remove lock and restore target")
-  .action(
-    withErrorHandling(async (target) => {
-      const entry = findEntryForTarget(target);
-      if (!entry) {
-        throw new Error(`No lock found for: ${target}`);
-      }
-      if (entry.type === "folder") {
-        await removeFolder(entry.target);
-      } else {
-        await removeApp(entry.target);
-  }
-    })
-);
+  .option("-f, --force", "Forget the lock even when there is nothing to restore (image or app binary missing)")
+  .action(withErrorHandling((target, options) => runRemove(target, options)));
 
 // status
 program
   .command("status [target]")
-  .description("Show lock status of a target or all targets")
+  .description("Show lock status of a target (exit code 1 if not locked) or all targets")
   .action(
     withErrorHandling(async (target) => {
       if (!target) {
@@ -337,23 +300,25 @@ program
         printStatusSummary(folders.length, apps.length, entries.length);
         return;
       }
-      const entry = findEntryForTarget(target);
+      const entry = findEntryForTarget(target, "status");
       if (!entry) {
         console.log(chalk.dim(`Not locked: ${target}`));
+        process.exitCode = 1;
         return;
       }
       console.log();
       printEntryStatus(entry, formatDate);
       console.log();
-  })
-);
+    })
+  );
 
 // Hidden subcommand used by the app-lock wrapper script
 program
   .command("auth-gate", { hidden: true })
   .action(async () => {
+    // Fail closed: only the explicit success below may exit 0.
+    process.exitCode = 1;
     try {
-
       await authenticate();
       process.exit(0);
     } catch {
@@ -364,5 +329,5 @@ program
 // ─── Run ────────────────────────────────────────────────────────────
 
 enforceMaxOSPlatform();
-if (shouldShowBanner()) await printBanner();
-program.parse();
+if (shouldShowBanner()) printBanner();
+await program.parseAsync();
