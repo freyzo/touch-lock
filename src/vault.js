@@ -81,6 +81,7 @@ function writeJsonAtomic(filePath, data) {
 const SE_HELPER_SOURCE = `
 import CryptoKit
 import Foundation
+import IOKit.pwr_mgt
 import LocalAuthentication
 import Security
 
@@ -99,8 +100,49 @@ func accessControl() -> SecAccessControl {
     return access
 }
 
+// tlock brb: lock the screen exactly like Control-Command-Q and keep the Mac from idle-sleeping until it is
+// unlocked, so running work carries on. No app is touched. Prints "<seconds away> <seconds asleep>".
+func brb() -> Never {
+    typealias LockScreen = @convention(c) () -> Int32
+    guard let login = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY),
+          let lockSymbol = dlsym(login, "SACLockScreenImmediate") else {
+        fail("the screen lock function is not available on this macOS", 3)
+    }
+    // Released automatically when this process exits, however it exits.
+    var assertion = IOPMAssertionID(0)
+    IOPMAssertionCreateWithName(
+        "PreventUserIdleSystemSleep" as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn),
+        "tlock brb: keeping work running while the screen is locked" as CFString, &assertion
+    )
+
+    let started = Date()
+    let awakeAtStart = ProcessInfo.processInfo.systemUptime  // does not advance while the Mac sleeps
+    var locked = false
+    let center = DistributedNotificationCenter.default()
+    center.addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { _ in
+        locked = true
+    }
+    center.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { _ in
+        let away = Date().timeIntervalSince(started)
+        let asleep = max(0, away - (ProcessInfo.processInfo.systemUptime - awakeAtStart))
+        print("\\(Int(away)) \\(Int(asleep))")
+        exit(0)
+    }
+    _ = unsafeBitCast(lockSymbol, to: LockScreen.self)()
+    // Never hold the Mac awake for a lock that did not happen, or for longer than a working day.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+        if !locked { fail("the screen did not lock", 4) }
+    }
+    DispatchQueue.main.asyncAfter(wallDeadline: .now() + 12 * 3600) {
+        fail("still locked after 12 hours; the Mac may sleep again", 5)
+    }
+    RunLoop.main.run()
+    fail("stopped waiting for unlock", 3)
+}
+
 let args = CommandLine.arguments
-guard args.count >= 2 else { fail("usage: create | derive <reason>", 64) }
+guard args.count >= 2 else { fail("usage: create | derive <reason> | brb", 64) }
+if args[1] == "brb" { brb() }
 guard SecureEnclave.isAvailable else { fail("unavailable", 2) }
 
 switch args[1] {
@@ -203,7 +245,8 @@ export function secureEnclaveHelperFailure() {
   return helperFailure;
 }
 
-function secureEnclaveHelper() {
+/** Path to tlock's Swift helper (Touch ID, brb), built on first use; null if it cannot be built. */
+export function helperBinary() {
   if (helperPath === undefined) {
     helperPath = existsSync(HELPER_BINARY) ? HELPER_BINARY : compileHelper();
   }
@@ -264,7 +307,7 @@ function secureEnclaveWrapKey(sharedSecret, ephemeralPublicKey) {
  * Returns null when the Secure Enclave or the Swift compiler is unavailable.
  */
 function enrollSecureEnclave(vmk) {
-  const helper = secureEnclaveHelper();
+  const helper = helperBinary();
   if (!helper) return null;
   let key, publicKey;
   try {
@@ -361,7 +404,7 @@ export function restoreVault(passphrase) {
 export function openVaultWithSecureEnclave(reason) {
   const vault = readVault();
   if (!vault.se) return { status: "not-enrolled" };
-  const helper = secureEnclaveHelper();
+  const helper = helperBinary();
   if (!helper) return { status: "unavailable" };
 
   let sharedSecret;

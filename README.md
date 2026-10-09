@@ -50,6 +50,7 @@ The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). 
 | Put an unlocked folder away again | `tlock /path` |
 | Lock every unlocked folder now | `tlock --all` or `tlock -a` |
 | Choose when folders lock themselves | `tlock autolock` |
+| Step away, keep agents running | `tlock brb` |
 | Stop using tlock on folder (restore normal folder) | `tlock remove /path` or `tlock -r /path` |
 | Destroy a locked folder for good (no restore) | `tlock shred /path` or `tlock -s /path` |
 | Forget a lock whose image or app is gone | `tlock remove --force /path` |
@@ -95,7 +96,7 @@ tlock [target]
 
 **Upgrading from 0.1.x:** after you create the recovery passphrase, existing folder locks are re-keyed automatically and the old master password is deleted from Keychain.
 
-A folder named like a subcommand (`list`, `status`, `unlock`, `remove`, `shred`, `autolock`, `reset`) must be passed as a path, e.g. `tlock ./list`.
+A folder named like a subcommand (`list`, `status`, `unlock`, `remove`, `shred`, `autolock`, `brb`, `reset`) must be passed as a path, e.g. `tlock ./list`.
 
 ### Unlock / remove / shred (long or short)
 
@@ -124,6 +125,21 @@ tlock autolock --app-grace 10m     # reopen a locked app within 10 min of quitti
 ```
 
 Defaults: screen lock **on**, sleep **on**, idle **15 min**. While a folder is unlocked, a small background process (`tlock autolock-watch`) checks every 5 seconds and exits once nothing is unlocked. It never force-ejects: if files on the volume are in use, it shows a notification once and retries. `tlock --all` does the same and lists any folder it could not lock.
+
+### Stepping away: `tlock brb`
+
+```bash
+tlock brb    # lock open folders and the screen; agents keep running until you unlock
+```
+
+For a short break while agents, builds or terminals are working:
+
+1. Open tlock folders are locked (one with files in use is left open, with a warning).
+2. The screen locks exactly as with Control-Command-Q. Every app is behind the lock screen; nothing is paused, closed or changed, so running work carries on.
+3. The Mac is kept from idle sleep until you unlock, then allowed to sleep again (at most 12 hours).
+4. Unlock as usual with Touch ID or your password. The terminal prints how long you were away, and warns if the Mac slept anyway.
+
+Locking the screen also ends the app grace period, so locked apps ask for Touch ID again. Closing the lid on battery always sleeps the Mac, which pauses everything; leave it open or stay on power.
 
 ### Other commands
 

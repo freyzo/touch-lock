@@ -21,6 +21,7 @@ import {
   TLOCK_STORAGE_DIR,
 } from "../src/config.js";
 import { parseDuration, ensureWatcher, runWatcher } from "../src/autolock.js";
+import { brb } from "../src/brb.js";
 import {
   clockTime,
   printKv,
@@ -476,6 +477,7 @@ function mainHelp() {
           ["unlock, -u TARGET", "open a locked folder or app"],
           ["remove, -r TARGET", "remove the lock and restore TARGET"],
           ["shred, -s FOLDER", "destroy a locked folder for good"],
+          ["brb", "stepping away: lock folders and the screen, keep agents running"],
           ["list", "list locked folders and apps"],
           ["status [TARGET]", "show whether TARGET is locked, or totals"],
           ["autolock", "show or change auto-lock and the app grace period"],
@@ -606,6 +608,15 @@ program
   .description("open a locked folder or app")
   .option("--for <DURATION>", "lock the folder again after DURATION (30m, 2h)")
   .action(withErrorHandling((target, options) => runUnlock(target, options.for ?? program.opts().for)));
+
+// brb
+program
+  .command("brb")
+  .usage("[OPTION]...")
+  .description(
+    "stepping away: lock open folders and the screen; apps and agents keep running and the Mac stays awake until you unlock"
+  )
+  .action(withErrorHandling(() => brb()));
 
 // list
 program
