@@ -15,4 +15,5 @@ export const BIN = {
   killall: "/usr/bin/killall",
   ioreg: "/usr/sbin/ioreg",
   ps: "/bin/ps",
+  launchctl: "/bin/launchctl",
 };

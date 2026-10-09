@@ -8,7 +8,8 @@ import { createInterface } from "readline";
 import { fileURLToPath } from "url";
 import { basename, dirname, join, resolve } from "path";
 import { lockFolder, unlockFolder, removeFolder, shredFolder, lockAllFolders, isMountPoint } from "../src/lock-folder.js";
-import { unlockApp, removeApp, isAppLocked } from "../src/lock-app.js";
+import { lockApp, unlockApp, removeApp, isAppLocked, findApp, installedApps } from "../src/lock-app.js";
+import { healAppGate } from "../src/app-gate.js";
 import { authenticate, replaceVault } from "../src/auth.js";
 import {
   getLockRegistry,
@@ -174,7 +175,8 @@ function enforceMaxOSPlatform() {
  * an app name in /Applications, or, for a bare name only, a unique basename match.
  */
 function findEntryForTarget(target, command) {
-  const exact = getEntry(canonicalPath(target)) || getEntry(`/Applications/${target}.app`);
+  const appPath = findApp(target);
+  const exact = getEntry(canonicalPath(target)) || (appPath && getEntry(appPath));
   if (exact) return exact;
   if (target.includes("/")) return null;
 
@@ -205,7 +207,7 @@ function detectTargetType(target) {
 
   const absolutePath = resolve(target);
   const isFolder = existsSync(absolutePath) && statSync(absolutePath).isDirectory();
-  const isApp = !target.includes("/") && installedApps().some((name) => name.toLowerCase() === target.toLowerCase());
+  const isApp = !isFolder && Boolean(findApp(target));
   if (isFolder && isApp) {
     throw new Error(
       `"${target}" matches both ./${target} and /Applications/${target}.app. Use ./${target} for the folder or ${target}.app for the app.`
@@ -216,19 +218,28 @@ function detectTargetType(target) {
   return "unknown";
 }
 
+/**
+ * The lock target from the words after tlock. Unquoted names with spaces (tlock Brave Browser)
+ * are joined when the joined name is a real folder or app; anything else is an error.
+ */
+function joinTarget(words) {
+  if (words.length <= 1) return words[0];
+  const joined = words.join(" ");
+  if (detectTargetType(joined) !== "unknown") return joined;
+  const suggestion = closestName(joined);
+  if (suggestion) {
+    throw new Error(`No folder or app named "${joined}"\nDid you mean: tlock ${shellArg(displayPath(suggestion))}`);
+  }
+  throw new Error(
+    `Too many arguments: ${words.map((word) => shellArg(word)).join(" ")}\n` +
+      `Put quotes around names with spaces: tlock "${joined}"`
+  );
+}
+
 /** Quote an argument for display if it has spaces; keep ~ outside the quotes so it still expands. */
 function shellArg(text) {
   if (!/[\s'"()&;$]/.test(text)) return text;
   return text.startsWith("~/") ? `~/"${text.slice(2)}"` : `"${text}"`;
-}
-
-/** Names of apps in /Applications, without ".app". */
-function installedApps() {
-  try {
-    return readdirSync("/Applications").filter((name) => name.endsWith(".app")).map((name) => name.slice(0, -4));
-  } catch {
-    return [];
-  }
 }
 
 function editDistance(a, b) {
@@ -255,7 +266,7 @@ function closestName(target) {
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
       .map((entry) => (target.includes("/") ? join(dirname(target), entry.name) : entry.name));
   } catch { /* parent missing */ }
-  const candidates = target.includes("/") ? folders : [...folders, ...installedApps()];
+  const candidates = target.includes("/") ? folders : [...folders, ...installedApps().map((app) => app.name)];
   const prefixed = candidates.filter((candidate) => basename(candidate).toLowerCase().startsWith(wanted));
   if (prefixed.length === 1) return prefixed[0];
   let best = null;
@@ -449,17 +460,17 @@ function mainHelp() {
   return renderHelp({
     usage: ["tlock [OPTION]... TARGET", "tlock COMMAND [OPTION]... [TARGET]"],
     summary: [
-      "Lock folders behind Touch ID on macOS.",
-      "With no COMMAND, lock TARGET, a folder path.",
+      "Lock folders and apps behind Touch ID on macOS.",
+      "With no COMMAND, lock TARGET: a folder path or an app name.",
     ],
     sections: [
       {
         title: "Commands",
         items: [
-          ["unlock, -u TARGET", "open a locked folder"],
+          ["unlock, -u TARGET", "open a locked folder or app"],
           ["remove, -r TARGET", "remove the lock and restore TARGET"],
           ["shred, -s FOLDER", "destroy a locked folder for good"],
-          ["list", "list locked folders"],
+          ["list", "list locked folders and apps"],
           ["status [TARGET]", "show whether TARGET is locked, or totals"],
           ["autolock", "show or change when open folders lock themselves"],
           ["reset", "set a new recovery passphrase if you forgot it"],
@@ -478,7 +489,7 @@ function mainHelp() {
         title: "Examples",
         items: [
           ["tlock ~/Taxes", "lock a folder"],
-          ["tlock -r ~/Taxes", "turn ~/Taxes back into a normal folder"],
+          ['tlock "Brave Browser"', "lock an app"],
           ["tlock -u ~/Taxes --for 30m", "open a folder for 30 minutes"],
         ],
       },
@@ -503,10 +514,10 @@ program.configureHelp({
 
 program
   .name("tlock")
-  .description("lock folders behind Touch ID on macOS")
+  .description("lock folders and apps behind Touch ID on macOS")
   .version(VERSION, "-v, --version", "output version information and exit")
   .helpOption("-h, --help", "display this help and exit")
-  .option("-u, --unlock <TARGET>", "open a locked folder")
+  .option("-u, --unlock <TARGET>", "open a locked folder or app")
   .option("--for <DURATION>", "with unlock: lock again after DURATION (30m, 2h)")
   .option("-a, --all", "lock every open folder")
   .option("-r, --remove <TARGET>", "remove the lock and restore TARGET")
@@ -533,10 +544,11 @@ program.helpInformation = mainHelp;
 
 // Default command: lock a target
 program
-  .argument("[TARGET]", "folder path to lock")
+  .argument("[TARGET...]", "folder path or app name to lock")
   .action(
-    withErrorHandling(async (target) => {
+    withErrorHandling(async (words) => {
       const options = program.opts();
+      const target = joinTarget(words);
       if ([options.unlock, options.remove, options.shred, options.all].filter(Boolean).length > 1) {
         throw new Error("Use only one of --unlock/-u, --remove/-r, --shred/-s, --all/-a.");
       }
@@ -568,13 +580,7 @@ program
 
       const targetType = detectTargetType(target);
       if (targetType === "app") {
-        const oldLock = findEntryForTarget(target, "remove");
-        throw new Error(
-          "App locking is turned off in this version\n" +
-            "Locking an app modified it, and some apps (Brave, for one) lost their extensions.\n" +
-            "A safer app lock that leaves apps untouched is planned. Folder locking works as before." +
-            (oldLock ? `\nThis app still has a lock from an older tlock. Remove it with: tlock -r "${basename(oldLock.target, ".app")}"` : "")
-        );
+        await lockApp(target);
       } else if (targetType === "folder") {
         await lockFolder(target);
       } else {
@@ -591,7 +597,7 @@ program
 program
   .command("unlock <TARGET>")
   .usage("[OPTION]... TARGET")
-  .description("open a locked folder")
+  .description("open a locked folder or app")
   .option("--for <DURATION>", "lock the folder again after DURATION (30m, 2h)")
   .action(withErrorHandling((target, options) => runUnlock(target, options.for ?? program.opts().for)));
 
@@ -599,7 +605,7 @@ program
 program
   .command("list")
   .usage("[OPTION]...")
-  .description("list locked folders")
+  .description("list locked folders and apps")
   .action(withErrorHandling(async () => runList()));
 
 // remove
@@ -701,5 +707,6 @@ function normalizeArgs(argv) {
 
 process.argv = [...process.argv.slice(0, 2), ...normalizeArgs(process.argv.slice(2))];
 enforceMaxOSPlatform();
+healAppGate();
 if (shouldShowBanner()) printBanner();
 await program.parseAsync();

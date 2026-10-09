@@ -1,0 +1,227 @@
+import { execFileSync } from "child_process";
+import { createHash } from "crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
+import { TLOCK_STORAGE_DIR, ensureStorageDir, getLockRegistry } from "./config.js";
+import { BIN } from "./bins.js";
+import { buildIcon, runSwiftc } from "./vault.js";
+
+// Locked apps are never modified. A LaunchAgent watches app launches; when a locked app starts,
+// it is paused (SIGSTOP) until Touch ID or the Mac password succeeds, and closed otherwise.
+
+const GATE_SOURCE = `
+import AppKit
+import LocalAuthentication
+
+let listPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ""
+
+func lockedBundleIDs() -> Set<String> {
+    guard let text = try? String(contentsOfFile: listPath, encoding: .utf8) else { return [] }
+    return Set(text.split(separator: "\\n").map(String.init))
+}
+
+final class Gate {
+    private var seen = Set<pid_t>()
+    private var observation: NSKeyValueObservation?
+
+    func start() {
+        // Apps already open when the gate starts (e.g. at login, or when the lock was added) keep running.
+        seen = Set(NSWorkspace.shared.runningApplications.map(\\.processIdentifier))
+        observation = NSWorkspace.shared.observe(\\.runningApplications, options: [.new]) { [weak self] workspace, _ in
+            self?.scan(workspace.runningApplications)
+        }
+    }
+
+    private func scan(_ apps: [NSRunningApplication]) {
+        seen.formIntersection(Set(apps.map(\\.processIdentifier)))
+        let locked = lockedBundleIDs()
+        for app in apps where !seen.contains(app.processIdentifier) {
+            seen.insert(app.processIdentifier)
+            if let id = app.bundleIdentifier, locked.contains(id) { hold(app) }
+        }
+    }
+
+    private func hold(_ app: NSRunningApplication) {
+        let pid = app.processIdentifier
+        kill(pid, SIGSTOP)
+        let name = app.localizedName ?? "this app"
+        LAContext().evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "open \\u{201C}\\(name)\\u{201D}") { ok, _ in
+            DispatchQueue.main.async {
+                if ok {
+                    kill(pid, SIGCONT)
+                    app.activate()
+                } else {
+                    kill(pid, SIGKILL)
+                }
+            }
+        }
+    }
+}
+
+let gate = Gate()
+gate.start()
+NSApplication.shared.setActivationPolicy(.prohibited)
+NSApplication.shared.run()
+`;
+
+const GATE_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>tlock</string>
+  <key>CFBundleIdentifier</key><string>com.freyzo.tlock.gate</string>
+  <key>CFBundleName</key><string>tlock</string>
+  <key>CFBundleDisplayName</key><string>tlock</string>
+  <key>CFBundleIconFile</key><string>tlock</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>
+`;
+
+const GATE_DIR = join(
+  TLOCK_STORAGE_DIR,
+  `gate-${createHash("sha256").update(GATE_SOURCE).update(GATE_INFO_PLIST).digest("hex").slice(0, 12)}`
+);
+const GATE_APP = join(GATE_DIR, "tlock.app");
+const GATE_BINARY = join(GATE_APP, "Contents", "MacOS", "tlock");
+const APP_LIST = join(TLOCK_STORAGE_DIR, "locked-apps");
+const AGENT_LABEL = "com.freyzo.tlock.gate";
+const AGENT_PLIST = join(homedir(), "Library", "LaunchAgents", `${AGENT_LABEL}.plist`);
+const SERVICE = `gui/${process.getuid()}/${AGENT_LABEL}`;
+
+function buildGate() {
+  ensureStorageDir();
+  mkdirSync(GATE_DIR, { recursive: true, mode: 0o700 });
+  const tempApp = join(GATE_DIR, `tlock.${process.pid}.app`);
+  const contents = join(tempApp, "Contents");
+  const srcFile = join(GATE_DIR, `gate.${process.pid}.swift`);
+  try {
+    mkdirSync(join(contents, "MacOS"), { recursive: true });
+    mkdirSync(join(contents, "Resources"), { recursive: true });
+    writeFileSync(join(contents, "Info.plist"), GATE_INFO_PLIST);
+    writeFileSync(srcFile, GATE_SOURCE, { mode: 0o600 });
+    runSwiftc(["-O", "-o", join(contents, "MacOS", "tlock"), srcFile]);
+    buildIcon(join(contents, "Resources", "tlock.icns"));
+    try {
+      execFileSync(BIN.codesign, ["--force", "--sign", "-", tempApp], { stdio: "ignore" });
+    } catch {
+      // The linker's ad-hoc signature on the binary still applies.
+    }
+    renameSync(tempApp, GATE_APP);
+  } catch (error) {
+    rmSync(tempApp, { recursive: true, force: true });
+    if (existsSync(GATE_BINARY)) return;
+    const detail = String(error.stderr || error.message || "").trim().split("\n")[0];
+    throw new Error(`Could not build tlock's app gate: ${detail || "the Swift compiler is not available"}`);
+  } finally {
+    rmSync(srcFile, { force: true });
+  }
+  for (const name of readdirSync(TLOCK_STORAGE_DIR)) {
+    const oldPath = join(TLOCK_STORAGE_DIR, name);
+    if (/^gate-[0-9a-f]{12}$/.test(name) && oldPath !== GATE_DIR) rmSync(oldPath, { recursive: true, force: true });
+  }
+}
+
+function agentPlist() {
+  const escape = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${AGENT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${escape(GATE_BINARY)}</string>
+    <string>${escape(APP_LIST)}</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+</dict>
+</plist>
+`;
+}
+
+function agentLoaded() {
+  try {
+    execFileSync(BIN.launchctl, ["print", SERVICE], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stopAgent() {
+  try {
+    execFileSync(BIN.launchctl, ["bootout", SERVICE], { stdio: "ignore" });
+  } catch {
+    // Not loaded.
+  }
+}
+
+function readText(path) {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+function lockedBundleIds() {
+  return getLockRegistry()
+    .filter((entry) => entry.type === "app" && entry.bundleId)
+    .map((entry) => entry.bundleId);
+}
+
+/**
+ * Make the gate match the registry: running with the current list while any app is locked,
+ * uninstalled when none is. Rebuilds the gate after a tlock update.
+ */
+export function syncAppGate() {
+  const bundleIds = lockedBundleIds();
+  if (bundleIds.length === 0) {
+    stopAgent();
+    rmSync(AGENT_PLIST, { force: true });
+    rmSync(APP_LIST, { force: true });
+    return;
+  }
+
+  ensureStorageDir();
+  const list = `${bundleIds.join("\n")}\n`;
+  if (readText(APP_LIST) !== list) writeFileSync(APP_LIST, list, { mode: 0o600 });
+
+  if (!existsSync(GATE_BINARY)) buildGate();
+  const plist = agentPlist();
+  if (readText(AGENT_PLIST) === plist && agentLoaded()) return;
+
+  stopAgent();
+  mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
+  writeFileSync(AGENT_PLIST, plist);
+  try {
+    execFileSync(BIN.launchctl, ["bootstrap", `gui/${process.getuid()}`, AGENT_PLIST], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+  } catch (error) {
+    const detail = String(error.stderr || error.message || "").trim().split("\n").pop();
+    throw new Error(`Could not start tlock's app gate: ${detail}`);
+  }
+}
+
+/** Cheap check for every tlock run: repair the gate if apps are locked but it is missing or stale. */
+export function healAppGate() {
+  if (lockedBundleIds().length === 0) return;
+  if (readText(AGENT_PLIST) === agentPlist() && existsSync(GATE_BINARY)) return;
+  try {
+    syncAppGate();
+  } catch {
+    // Reported when the user next locks or removes an app.
+  }
+}
+
+/** True while the gate is installed and running. */
+export function appGateRunning() {
+  return existsSync(AGENT_PLIST) && agentLoaded();
+}

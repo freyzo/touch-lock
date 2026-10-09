@@ -5,8 +5,8 @@
 <h1 align="center">tlock</h1>
 
 <p align="center">
-  <em>Lock folders with Touch ID on macOS</em><br />
-  <em>Encrypted disk images, opened with your fingerprint</em>
+  <em>Lock folders and apps with Touch ID on macOS</em><br />
+  <em>Encrypted disk images for folders, a launch gate for apps</em>
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@ The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). 
 
 - **`tlock`** is one CLI:
   - **Folders** → AES-256 encrypted, writable disk image; plain folder removed after the image is created and registered.
-  - **Apps**: turned off in 0.2.1, see [App locking](#apps).
+  - **Apps** → paused at launch until **Touch ID / password**; the app itself is never modified.
 - **Lock, unlock, remove, and shred** go through **authentication**: Touch ID or your Mac login password, enforced by the Secure Enclave, with a recovery passphrase as fallback. Putting an unlocked folder away again needs none, since it only removes access.
 - Short flags: **`-u`** unlock, **`-r`** remove, **`-s`** shred (same as `unlock` / `remove` / `shred`).
 
@@ -43,6 +43,7 @@ The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). 
 | You want | Command |
 | --- | --- |
 | First-time lock folder | `tlock /path/to/folder` |
+| Lock an app | `tlock "Brave Browser"` |
 | Open locked folder | `tlock unlock /path` or `tlock -u /path` |
 | Open it for a limited time | `tlock unlock /path --for 30m` |
 | Put an unlocked folder away again | `tlock /path` |
@@ -86,7 +87,7 @@ tlock [target]
 
 | Arg | Description |
 | --- | --- |
-| `target` | Folder path to lock. Run it again on an unlocked folder to lock it again. |
+| `target` | Folder path or app name to lock (any capitalization; quotes optional for app names with spaces). Run it again on an unlocked folder to lock it again. |
 
 **First run:** you create a **recovery passphrase** (12+ characters). It is never stored: day to day you unlock with Touch ID or your Mac login password, and the passphrase is the way back in on a new Mac or if the Secure Enclave key is lost. **Forget it and lose this Mac, and locked folders cannot be recovered.** Forgot it? `tlock reset` sets a new one, but folders locked under the old one stay closed.
 
@@ -104,8 +105,8 @@ tlock shred <target>      # or:  tlock -s <target>
 
 | Command | Description |
 | --- | --- |
-| `unlock` / `-u` | Folder: authenticate, then mount its image at the original path. `--for 30m` locks it again after that long. App: open it; its wrapper asks for Touch ID / password. |
-| `remove` / `-r` | Authenticate, restore normal folder or app binary, delete the image / wrapper. `--force` forgets a lock whose image or app binary is missing. |
+| `unlock` / `-u` | Folder: authenticate, then mount its image at the original path. `--for 30m` locks it again after that long. App: open it; tlock's app gate asks for Touch ID / password. |
+| `remove` / `-r` | Authenticate, then restore a normal folder (and delete its image) or stop gating an app. `--force` forgets a lock whose image or app is missing. |
 | `shred` / `-s` | Folder only. Authenticate, eject if open, erase the image's keys (`hdiutil erasekeys`), overwrite the key file, delete the image, and clear Quick Look thumbnails, Recents and the parent's `.DS_Store`. Nothing is restored. |
 | `reset` | Forgot the recovery passphrase: set a new one. Locked folders cannot be opened without the old passphrase, so their images and keys are moved to `~/.tlock/reset-<time>/` (not deleted; moving them back recovers them if the old passphrase turns up) and their locks are forgotten. Locked apps stay locked and use the new passphrase. Asks you to type `reset` first. |
 
@@ -187,14 +188,14 @@ tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, 
 
 ### Apps
 
-> **App locking is turned off in 0.2.1.** It worked by modifying the app, which breaks its code signature, and Chromium browsers such as Brave dropped the user's extensions after being locked. A replacement that leaves apps untouched is planned. `tlock -r "App Name"` still removes an app lock made by 0.2.0 or earlier.
+Apps are **never modified**: no files inside the app change, so its code signature, data, extensions and keychain items stay intact.
 
-How 0.2.0 and earlier locked apps:
+1. `tlock "App Name"` records the app's bundle ID and starts tlock's **app gate**, a small background helper (`~/.tlock/gate-<hash>/tlock.app`, run by the LaunchAgent `~/Library/LaunchAgents/com.freyzo.tlock.gate.plist`).
+2. When a locked app starts, the gate pauses it at once and shows the Touch ID / Mac password prompt. Pass, and the app continues; cancel, and it is closed.
+3. An app that is already open when you lock it keeps running; the prompt comes the next time it starts.
+4. `tlock -r "App Name"` stops gating it. When no app is locked, the LaunchAgent is removed.
 
-1. `CFBundleExecutable` binary renamed to `<name>.tlock-original`; bash wrapper installed in its place.
-2. Wrapper runs hidden `tlock auth-gate` with the Node.js and tlock paths recorded at lock time → Touch ID / Mac login password, or the recovery passphrase (terminal prompt, or a macOS dialog when launched from Finder / Dock) → `exec` real binary.
-3. `tlock unlock <app>` just opens the app; the wrapper asks.
-4. Run `tlock <app>` again to repair the wrapper (e.g. after Node.js moved) or to re-apply the lock after an app update.
+Locks made by tlock 0.2.0 or earlier modified the app (its executable was swapped for a wrapper script), which broke its signature; Chromium browsers such as Brave dropped their extensions. `tlock -r "App Name"` puts the original executable back; lock it again afterwards to use the gate.
 
 ### Authentication
 
@@ -224,11 +225,8 @@ How 0.2.0 and earlier locked apps:
 ## Limitations
 
 - **macOS only** — `hdiutil`, `security`, `LocalAuthentication`.
-- **SIP** — cannot lock apps under `/System/Applications`.
-- **App lock** — renaming binary can break code signing / Gatekeeper for some apps.
-- **App Management** (macOS 13+) — allow your terminal under System Settings → Privacy & Security → App Management, or app locking is denied. Apps owned by root (e.g. some App Store apps) can't be locked.
-- **App updates** replace the wrapper; run `tlock <app>` again to re-apply the lock.
-- **Global install required** for app locking (the wrapper records tlock's path; the `npx` cache is temporary).
+- **App lock** — Finder, Dock, System Settings and other apps the Mac needs cannot be locked.
+- **App updates** keep the lock: the gate matches the app's bundle ID, not its files.
 - **Cloud folders** — locking a folder inside iCloud Drive / Dropbox deletes it from the cloud too.
 
 ---
@@ -239,7 +237,7 @@ How 0.2.0 and earlier locked apps:
 - **Someone at your unlocked Mac with a terminal** cannot open a locked folder without your finger, your Mac login password, or the recovery passphrase.
 - **Not covered:** malware running as you can read a folder *while it is unlocked* (auto-lock keeps that window short), or tamper with tlock and capture a key the next time you authenticate. Only a separate macOS account plus FileVault protects against that.
 - **Copies made before locking** (Time Machine, APFS local snapshots, iCloud / Dropbox versions) still hold the plain folder. Overwriting files before deletion is best effort on SSDs and APFS. Turn on FileVault.
-- **App wrapper** is a deterrent, not a barrier: the real binary stays runnable (`Contents/MacOS/<name>.tlock-original`) and the app's data in `~/Library` is not encrypted.
+- **App gate** is a deterrent, not a barrier: someone at your unlocked Mac with a terminal can stop the gate (`launchctl bootout`), and the app's data in `~/Library` is not encrypted.
 - **Shred** erases the image's keys and the key file, but copies of `~/.tlock` in backups can still be opened with your recovery passphrase.
 
 ---

@@ -180,7 +180,7 @@ let helperFailure = null;
 // update), the Command Line Tools, which need no separate license step.
 const SWIFT_DEVELOPER_DIRS = [null, "/Library/Developer/CommandLineTools"];
 
-function runSwiftc(args) {
+export function runSwiftc(args) {
   let lastError;
   for (const developerDir of SWIFT_DEVELOPER_DIRS) {
     if (developerDir && !existsSync(developerDir)) continue;
@@ -210,7 +210,7 @@ function secureEnclaveHelper() {
   return helperPath;
 }
 
-function buildIcon(icnsPath) {
+export function buildIcon(icnsPath) {
   const iconset = join(dirname(icnsPath), "tlock.iconset");
   try {
     mkdirSync(iconset, { recursive: true });
