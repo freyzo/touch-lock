@@ -74,7 +74,9 @@ Anyone who sits down at your unlocked Mac can open your private folders and apps
 ## Contact
 
 <p align="center">
-  Made by <a href="https://freyazou.com"><b>Freya Zou</b></a>
-  <br /><br />
-  <a href="https://x.com/freyazou">X</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://www.linkedin.com/in/freya-zou-068615252/">LinkedIn</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://www.youtube.com/channel/UC9pdMpmZ6ZNAakfcZSxaJXQ">YouTube</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://github.com/freyzo">GitHub</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://freyazou.com">freyazou.com</a>
+  <a href="https://x.com/freyazou" title="X @freyazou"><img src="https://raw.githubusercontent.com/freyzo/touch-lock/main/assets/social/x.svg" alt="X @freyazou" width="44" height="44" /></a>&nbsp;&nbsp;
+  <a href="https://www.linkedin.com/in/freya-zou-068615252/" title="LinkedIn Freya Zou"><img src="https://raw.githubusercontent.com/freyzo/touch-lock/main/assets/social/linkedin.svg" alt="LinkedIn Freya Zou" width="44" height="44" /></a>&nbsp;&nbsp;
+  <a href="https://www.youtube.com/channel/UC9pdMpmZ6ZNAakfcZSxaJXQ" title="YouTube"><img src="https://raw.githubusercontent.com/freyzo/touch-lock/main/assets/social/youtube.svg" alt="YouTube" width="44" height="44" /></a>&nbsp;&nbsp;
+  <a href="https://github.com/freyzo" title="GitHub @freyzo"><img src="https://raw.githubusercontent.com/freyzo/touch-lock/main/assets/social/github.svg" alt="GitHub @freyzo" width="44" height="44" /></a>&nbsp;&nbsp;
+  <a href="https://freyazou.com" title="freyazou.com"><img src="https://raw.githubusercontent.com/freyzo/touch-lock/main/assets/social/site.svg" alt="freyazou.com" width="44" height="44" /></a>
 </p>
