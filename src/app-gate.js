@@ -189,12 +189,17 @@ function agentLoaded() {
   }
 }
 
+const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+const sleepMs = (ms) => Atomics.wait(sleepCell, 0, 0, ms);
+
+/** Unload the gate and wait until launchd has let go of it; bootstrap fails while it is still tearing down. */
 function stopAgent() {
   try {
     execFileSync(BIN.launchctl, ["bootout", SERVICE], { stdio: "ignore" });
   } catch {
     // Not loaded.
   }
+  for (let waited = 0; waited < 5_000 && agentLoaded(); waited += 100) sleepMs(100);
 }
 
 function readText(path) {
@@ -237,13 +242,20 @@ export function syncAppGate() {
   stopAgent();
   mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
   writeFileSync(AGENT_PLIST, plist);
-  try {
-    execFileSync(BIN.launchctl, ["bootstrap", `gui/${process.getuid()}`, AGENT_PLIST], {
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-  } catch (error) {
-    const detail = String(error.stderr || error.message || "").trim().split("\n").pop();
-    throw new Error(`Could not start tlock's app gate: ${detail}`);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      execFileSync(BIN.launchctl, ["bootstrap", `gui/${process.getuid()}`, AGENT_PLIST], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      return;
+    } catch (error) {
+      if (attempt < 3) {
+        sleepMs(500);
+        continue;
+      }
+      const detail = String(error.stderr || error.message || "").trim().split("\n")[0];
+      throw new Error(`Could not start tlock's app gate: ${detail}`);
+    }
   }
 }
 
@@ -251,7 +263,8 @@ export function syncAppGate() {
 export function healAppGate() {
   try {
     if (lockedBundleIds().length === 0) return;
-    if (readText(AGENT_PLIST) === agentPlist() && existsSync(GATE_BINARY)) return;
+    // A failed start leaves the new plist in place, so also check that launchd actually has the gate.
+    if (readText(AGENT_PLIST) === agentPlist() && existsSync(GATE_BINARY) && appGateRunning()) return;
     syncAppGate();
   } catch {
     // Reported by the command itself (e.g. an unreadable config), or when the user next locks or removes an app.
