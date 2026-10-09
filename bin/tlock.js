@@ -270,6 +270,15 @@ function closestName(target) {
   return best;
 }
 
+function runList() {
+  const entries = getLockRegistry();
+  if (entries.length === 0) {
+    console.log(`\n  ${chalk.dim("Nothing is locked.")}`);
+    return;
+  }
+  printLockedTargets(entries, formatDate, lockState);
+}
+
 async function runUnlock(target, forDuration) {
   const entry = findEntryForTarget(target, "unlock");
   if (!entry) {
@@ -504,13 +513,19 @@ program
   .option("-s, --shred <FOLDER>", "destroy a locked folder for good")
   .configureOutput({ outputError: (text, write) => {
     const message = text.replace(/^error: /, "").trim();
-    const quoteHint = /too many arguments/.test(message)
+    let quoteHint = /^too many arguments\./.test(message)
       ? `\n${chalk.dim('     Put quotes around names with spaces: tlock "Brave Browser"')}`
       : "";
+    // A command typed as a flag, e.g. --status or -reset: point to the command.
+    const flagged = /unknown option '-{1,2}([a-z-]+)'/.exec(message)?.[1];
+    if (flagged && program.commands.some((command) => command.name() === flagged && !command._hidden)) {
+      quoteHint = `\n${chalk.dim(`     Did you mean: tlock ${flagged}`)}`;
+    }
     write(`${formatError(message)}${quoteHint}\n${chalk.dim("     Try 'tlock --help' for more information.")}\n`);
   } });
 
 program.allowExcessArguments(false);
+program.showSuggestionAfterError(false);
 
 // The main screen is hand-written; subcommands use commander's generated help with the same wording.
 program.configureHelp({ ...program.configureHelp(), showGlobalOptions: false });
@@ -584,16 +599,7 @@ program
   .command("list")
   .usage("[OPTION]...")
   .description("list locked folders")
-  .action(
-    withErrorHandling(async () => {
-      const entries = getLockRegistry();
-      if (entries.length === 0) {
-        console.log(`\n  ${chalk.dim("Nothing is locked.")}`);
-        return;
-      }
-      printLockedTargets(entries, formatDate, lockState);
-    })
-  );
+  .action(withErrorHandling(async () => runList()));
 
 // remove
 program
@@ -675,6 +681,24 @@ program
 
 // ─── Run ────────────────────────────────────────────────────────────
 
+/**
+ * A whole word after a single dash (-list, -reset, -version) means that command or long option,
+ * not bundled short flags: -reset would otherwise read as -r eset and try to remove "eset".
+ */
+function normalizeArgs(argv) {
+  const longOptions = new Set(program.options.map((option) => option.long?.slice(2)).filter(Boolean));
+  longOptions.add("help");
+  const commands = new Set(program.commands.filter((command) => !command._hidden).map((command) => command.name()));
+  return argv.map((arg) => {
+    const word = /^-([a-z][a-z-]{2,})$/.exec(arg)?.[1];
+    if (!word) return arg;
+    if (longOptions.has(word)) return `--${word}`;
+    if (commands.has(word)) return word;
+    return arg;
+  });
+}
+
+process.argv = [...process.argv.slice(0, 2), ...normalizeArgs(process.argv.slice(2))];
 enforceMaxOSPlatform();
 if (shouldShowBanner()) printBanner();
 await program.parseAsync();
