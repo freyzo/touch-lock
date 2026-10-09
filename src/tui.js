@@ -108,7 +108,7 @@ export function printResult(headline, details = [], tone = "ok") {
 export function formatError(message) {
   const [first, ...rest] = String(message).split("\n");
   const hints = rest.map((line) => `${INDENT}   ${chalk.dim(line.trim())}`);
-  return ["", `${INDENT}${MARKS.bad} ${chalk.red(first)}`, ...hints].join("\n");
+  return ["", `${INDENT}${MARKS.bad} ${first}`, ...hints].join("\n");
 }
 
 /**

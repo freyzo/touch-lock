@@ -3,7 +3,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { platform } from "os";
-import { readFileSync, existsSync, statSync, renameSync } from "fs";
+import { readFileSync, readdirSync, existsSync, statSync, renameSync } from "fs";
 import { createInterface } from "readline";
 import { fileURLToPath } from "url";
 import { basename, dirname, join, resolve } from "path";
@@ -202,7 +202,7 @@ function detectTargetType(target) {
 
   const absolutePath = resolve(target);
   const isFolder = existsSync(absolutePath) && statSync(absolutePath).isDirectory();
-  const isApp = !target.includes("/") && existsSync(`/Applications/${target}.app`);
+  const isApp = !target.includes("/") && installedApps().some((name) => name.toLowerCase() === target.toLowerCase());
   if (isFolder && isApp) {
     throw new Error(
       `"${target}" matches both ./${target} and /Applications/${target}.app. Use ./${target} for the folder or ${target}.app for the app.`
@@ -211,6 +211,60 @@ function detectTargetType(target) {
   if (isApp) return "app";
   if (isFolder) return "folder";
   return "unknown";
+}
+
+/** Quote an argument for display if it has spaces; keep ~ outside the quotes so it still expands. */
+function shellArg(text) {
+  if (!/[\s'"()&;$]/.test(text)) return text;
+  return text.startsWith("~/") ? `~/"${text.slice(2)}"` : `"${text}"`;
+}
+
+/** Names of apps in /Applications, without ".app". */
+function installedApps() {
+  try {
+    return readdirSync("/Applications").filter((name) => name.endsWith(".app")).map((name) => name.slice(0, -4));
+  } catch {
+    return [];
+  }
+}
+
+function editDistance(a, b) {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return row[b.length];
+}
+
+/** The folder (next to target) or app whose name is closest to a mistyped target, or null. */
+function closestName(target) {
+  const wanted = basename(target).toLowerCase();
+  let folders = [];
+  try {
+    const parent = dirname(resolve(target));
+    folders = readdirSync(parent, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .map((entry) => (target.includes("/") ? join(dirname(target), entry.name) : entry.name));
+  } catch { /* parent missing */ }
+  const candidates = target.includes("/") ? folders : [...folders, ...installedApps()];
+  const prefixed = candidates.filter((candidate) => basename(candidate).toLowerCase().startsWith(wanted));
+  if (prefixed.length === 1) return prefixed[0];
+  let best = null;
+  let bestDistance = Math.max(2, Math.floor(wanted.length / 4)) + 1;
+  for (const candidate of candidates) {
+    const distance = editDistance(wanted, basename(candidate).toLowerCase());
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
 }
 
 async function runUnlock(target, forDuration) {
@@ -445,7 +499,15 @@ program
   .option("-a, --all", "lock every open folder")
   .option("-r, --remove <TARGET>", "remove the lock and restore TARGET")
   .option("-s, --shred <FOLDER>", "destroy a locked folder for good")
-  .configureOutput({ outputError: (text, write) => write(`${formatError(text.replace(/^error: /, "").trim())}\n${chalk.dim("     Try 'tlock --help' for more information.")}\n`) });
+  .configureOutput({ outputError: (text, write) => {
+    const message = text.replace(/^error: /, "").trim();
+    const quoteHint = /too many arguments/.test(message)
+      ? `\n${chalk.dim('     Put quotes around names with spaces: tlock "Brave Browser"')}`
+      : "";
+    write(`${formatError(message)}${quoteHint}\n${chalk.dim("     Try 'tlock --help' for more information.")}\n`);
+  } });
+
+program.allowExcessArguments(false);
 
 // The main screen is hand-written; subcommands use commander's generated help with the same wording.
 program.configureHelp({ ...program.configureHelp(), showGlobalOptions: false });
@@ -497,8 +559,10 @@ program
       } else if (targetType === "folder") {
         await lockFolder(target);
       } else {
+        const suggestion = closestName(target);
         throw new Error(
-          `Cannot determine target type for "${target}". Provide a valid folder path or .app name.`
+          `No folder or app named "${displayPath(target)}"` +
+            (suggestion ? `\nDid you mean: tlock ${shellArg(displayPath(suggestion))}` : "")
         );
       }
     })
@@ -521,7 +585,7 @@ program
     withErrorHandling(async () => {
       const entries = getLockRegistry();
       if (entries.length === 0) {
-        console.log("\n  " + chalk.dim("No locked targets.") + "\n");
+        console.log(`\n  ${chalk.dim("Nothing is locked.")}`);
         return;
       }
       printLockedTargets(entries, formatDate, lockState);
