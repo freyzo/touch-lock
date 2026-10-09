@@ -3,13 +3,22 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { platform } from "os";
-import { readFileSync, existsSync, statSync } from "fs";
+import { readFileSync, existsSync, statSync, renameSync } from "fs";
+import { createInterface } from "readline";
 import { fileURLToPath } from "url";
 import { basename, dirname, join, resolve } from "path";
 import { lockFolder, unlockFolder, removeFolder, shredFolder, lockAllFolders, isMountPoint } from "../src/lock-folder.js";
 import { lockApp, unlockApp, removeApp, isAppLocked } from "../src/lock-app.js";
-import { authenticate } from "../src/auth.js";
-import { getLockRegistry, getEntry, canonicalPath, getSettings, updateSettings } from "../src/config.js";
+import { authenticate, replaceVault } from "../src/auth.js";
+import {
+  getLockRegistry,
+  getEntry,
+  removeEntry,
+  canonicalPath,
+  getSettings,
+  updateSettings,
+  TLOCK_STORAGE_DIR,
+} from "../src/config.js";
 import { parseDuration, describeAutoLock, ensureWatcher, runWatcher } from "../src/autolock.js";
 import {
   clockTime,
@@ -280,6 +289,65 @@ async function runShred(target) {
   await shredFolder(entry);
 }
 
+function askLine(question) {
+  const readlineInterface = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolveAnswer) =>
+    readlineInterface.question(question, (answer) => {
+      readlineInterface.close();
+      resolveAnswer(answer.trim());
+    })
+  );
+}
+
+/**
+ * Forgotten recovery passphrase: set a new one. Locked folders cannot be opened without the old
+ * passphrase, so their images and keys are moved aside (not deleted) and their locks forgotten.
+ * Locked apps stay locked and use the new passphrase.
+ */
+async function runReset() {
+  if (!process.stdin.isTTY) throw new Error("tlock reset must be run in a terminal.");
+  const folders = getLockRegistry().filter((entry) => entry.type === "folder");
+  const open = folders.filter((entry) => isMountPoint(entry.target));
+  if (open.length > 0) {
+    throw new Error(
+      `${open.map((entry) => entry.target).join(", ")} ${open.length === 1 ? "is" : "are"} open right now. ` +
+        "Copy out anything you need, put it away with tlock <folder>, then run tlock reset again."
+    );
+  }
+
+  console.log(chalk.yellow("\n  Reset the recovery passphrase\n"));
+  console.log("  Use this only if you forgot your recovery passphrase and Touch ID does not work.");
+  if (folders.length > 0) {
+    console.log(chalk.red(`\n  These locked folders cannot be opened without the old passphrase:`));
+    for (const entry of folders) console.log(`    ${entry.target}`);
+    console.log(chalk.dim("\n  Their encrypted images are moved aside, not deleted. If you remember the old passphrase"));
+    console.log(chalk.dim("  later, move the files back into ~/.tlock to recover them."));
+  }
+  console.log(chalk.dim("  Locked apps stay locked and will use the new passphrase.\n"));
+
+  if ((await askLine("  Type reset to continue: ")) !== "reset") {
+    console.log(chalk.dim("  Cancelled. Nothing changed."));
+    return;
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const archiveDir = join(TLOCK_STORAGE_DIR, `reset-${stamp}`);
+  console.log();
+  await replaceVault(archiveDir);
+  for (const entry of folders) {
+    if (entry.dmgPath && existsSync(entry.dmgPath)) {
+      renameSync(entry.dmgPath, join(archiveDir, basename(entry.dmgPath)));
+    }
+    removeEntry(entry.target);
+  }
+
+  console.log();
+  printKv("RESET", [
+    [chalk.dim("Folders"), folders.length > 0 ? `${folders.length} lock(s) removed` : chalk.dim("none")],
+    [chalk.dim("Old files"), chalk.dim(archiveDir.replace(process.env.HOME, "~"))],
+  ]);
+}
+
 /**
  * Wrap an async action with consistent error handling.
  */
@@ -449,6 +517,12 @@ program
   .option("--sleep <on|off>", "Lock when the Mac sleeps")
   .option("--screen-lock <on|off>", "Lock when the screen locks or another user switches in")
   .action(withErrorHandling(async (options) => runAutolock(options)));
+
+// reset
+program
+  .command("reset")
+  .description("Forgot the recovery passphrase: set a new one (locked folders are moved aside)")
+  .action(withErrorHandling(() => runReset()));
 
 // status
 program

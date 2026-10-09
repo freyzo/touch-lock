@@ -174,6 +174,34 @@ export const HELPER_ICON = join(HELPER_APP, "Contents", "Resources", "tlock.icns
 const OLD_HELPER_PATTERN = /^(touchid-helper(-[0-9a-f]{12})?|helper-[0-9a-f]{12})$/;
 
 let helperPath;
+let helperFailure = null;
+
+// The selected Xcode first; if it cannot build (e.g. its license was never accepted after an
+// update), the Command Line Tools, which need no separate license step.
+const SWIFT_DEVELOPER_DIRS = [null, "/Library/Developer/CommandLineTools"];
+
+function runSwiftc(args) {
+  let lastError;
+  for (const developerDir of SWIFT_DEVELOPER_DIRS) {
+    if (developerDir && !existsSync(developerDir)) continue;
+    try {
+      execFileSync(BIN.swiftc, args, {
+        stdio: ["ignore", "ignore", "pipe"],
+        timeout: 300_000,
+        env: developerDir ? { ...process.env, DEVELOPER_DIR: developerDir } : process.env,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+/** Why the Touch ID helper could not be built in this run, or null. */
+export function secureEnclaveHelperFailure() {
+  return helperFailure;
+}
 
 function secureEnclaveHelper() {
   if (helperPath === undefined) {
@@ -214,7 +242,7 @@ function compileHelper() {
     mkdirSync(join(contents, "Resources"), { recursive: true });
     writeFileSync(join(contents, "Info.plist"), HELPER_INFO_PLIST);
     writeFileSync(srcFile, SE_HELPER_SOURCE, { mode: 0o600 });
-    execFileSync(BIN.swiftc, ["-o", join(contents, "MacOS", "tlock"), srcFile], { stdio: "ignore", timeout: 300_000 });
+    runSwiftc(["-o", join(contents, "MacOS", "tlock"), srcFile]);
     buildIcon(join(contents, "Resources", "tlock.icns"));
     try {
       execFileSync(BIN.codesign, ["--force", "--sign", "-", tempApp], { stdio: "ignore" });
@@ -222,9 +250,12 @@ function compileHelper() {
       // The linker's ad-hoc signature on the binary still applies.
     }
     renameSync(tempApp, HELPER_APP);
-  } catch {
+  } catch (error) {
     rmSync(tempApp, { recursive: true, force: true });
-    return existsSync(HELPER_BINARY) ? HELPER_BINARY : null;
+    if (existsSync(HELPER_BINARY)) return HELPER_BINARY;
+    const detail = String(error.stderr || error.message || "").trim().split("\n")[0];
+    helperFailure = detail || "the Swift compiler is not available";
+    return null;
   } finally {
     rmSync(srcFile, { force: true });
   }
@@ -306,6 +337,17 @@ function keyFiles() {
 
 export function hasOrphanedKeys() {
   return keyFiles().length > 0;
+}
+
+/**
+ * Move vault.json and every image key file into archiveDir, leaving no vault behind.
+ * Returns the moved file names.
+ */
+export function archiveVault(archiveDir) {
+  const files = [...(vaultExists() ? [VAULT_FILE] : []), ...keyFiles()];
+  mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
+  for (const file of files) renameSync(file, join(archiveDir, file.slice(TLOCK_STORAGE_DIR.length + 1)));
+  return files;
 }
 
 /**
