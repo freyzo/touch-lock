@@ -162,6 +162,11 @@ export function displayPath(p) {
  * fixed edge, so resizing the window afterwards cannot break it. Long values wrap under themselves;
  * when the value column would be too narrow, values go on their own line below the label.
  */
+/** Wrap at spaces; only a word longer than the width (e.g. a path) is split mid-word. */
+function wrapValue(value, width) {
+  return wrapWords(value, width).flatMap((line) => (vlen(line) > width ? wrapAnsi(line, width) : [line]));
+}
+
 export function printKv(title, rows) {
   const width = Math.max(10, terminalColumns() - INDENT.length - 1);
   const gap = "  ";
@@ -172,10 +177,10 @@ export function printKv(title, rows) {
   for (const [label, value] of rows) {
     if (valueW < 12) {
       lines.push(INDENT + label);
-      lines.push(...wrapAnsi(value, width - 2).map((chunk) => `${INDENT}  ${chunk}`));
+      lines.push(...wrapValue(value, width - 2).map((chunk) => `${INDENT}  ${chunk}`));
       continue;
     }
-    wrapAnsi(value, valueW).forEach((chunk, i) => {
+    wrapValue(value, valueW).forEach((chunk, i) => {
       const prefix = i === 0 ? label + " ".repeat(labelW - vlen(label)) : " ".repeat(labelW);
       lines.push(INDENT + prefix + gap + chunk);
     });
