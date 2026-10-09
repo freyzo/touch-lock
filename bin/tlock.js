@@ -32,7 +32,7 @@ import {
   printLockedTargets,
   printStatusSummary,
   printEntryStatus,
-  renderTable,
+  shellPath,
   stripAnsi,
   terminalColumns,
 } from "../src/tui.js";
@@ -228,18 +228,12 @@ function joinTarget(words) {
   if (detectTargetType(joined) !== "unknown") return joined;
   const suggestion = closestName(joined);
   if (suggestion) {
-    throw new Error(`No folder or app named "${joined}"\nDid you mean: tlock ${shellArg(displayPath(suggestion))}`);
+    throw new Error(`No folder or app named "${joined}"\nDid you mean: tlock ${shellPath(suggestion)}`);
   }
   throw new Error(
-    `Too many arguments: ${words.map((word) => shellArg(word)).join(" ")}\n` +
+    `Too many arguments: ${words.map((word) => shellPath(word)).join(" ")}\n` +
       `Put quotes around names with spaces: tlock "${joined}"`
   );
-}
-
-/** Quote an argument for display if it has spaces; keep ~ outside the quotes so it still expands. */
-function shellArg(text) {
-  if (!/[\s'"()&;$]/.test(text)) return text;
-  return text.startsWith("~/") ? `~/"${text.slice(2)}"` : `"${text}"`;
 }
 
 function editDistance(a, b) {
@@ -587,7 +581,7 @@ program
         const suggestion = closestName(target);
         throw new Error(
           `No folder or app named "${displayPath(target)}"` +
-            (suggestion ? `\nDid you mean: tlock ${shellArg(displayPath(suggestion))}` : "")
+            (suggestion ? `\nDid you mean: tlock ${shellPath(suggestion)}` : "")
         );
       }
     })
@@ -652,7 +646,7 @@ program
         const folders = entries.filter((e) => e.type === "folder");
         const apps    = entries.filter((e) => e.type === "app");
 
-        printStatusSummary(folders.length, apps.length, entries.length);
+        printStatusSummary(folders.length, apps.length);
         return;
       }
       const entry = findEntryForTarget(target, "status");

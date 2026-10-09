@@ -71,21 +71,6 @@ function anyRuleEnabled(settings) {
   return settings.idleMinutes > 0 || settings.lockOnSleep || settings.lockOnScreenLock;
 }
 
-/**
- * One line for the user, e.g. "Auto-locks at 14:30, on screen lock, on sleep, after 15 min idle."
- */
-export function describeAutoLock(settings, autoLockAt) {
-  const rules = [];
-  if (autoLockAt) {
-    const time = new Date(autoLockAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    rules.push(`at ${time}`);
-  }
-  if (settings.lockOnScreenLock) rules.push("on screen lock");
-  if (settings.lockOnSleep) rules.push("on sleep");
-  if (settings.idleMinutes > 0) rules.push(`after ${settings.idleMinutes} min idle`);
-  return rules.length > 0 ? `Auto-locks ${rules.join(", ")}.` : "Auto-lock is off.";
-}
-
 // ─── Watcher process ────────────────────────────────────────────────
 
 function readPid() {

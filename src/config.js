@@ -102,7 +102,8 @@ function writeConfig(config) {
 
 /**
  * Returns all lock registry entries.
- * Each entry: { target, type: "folder"|"app", dmgPath? (folder image), executableName? (app), autoLockAt? (epoch ms), createdAt }
+ * Each entry: { target, type: "folder"|"app", dmgPath? (folder image), bundleId? (app),
+ *   executableName? (app locked by tlock 0.2.0 or earlier), autoLockAt? (epoch ms), createdAt }
  */
 export function getLockRegistry() {
   return readConfig().entries;
@@ -124,7 +125,7 @@ export function getEntry(targetPath) {
 
 /**
  * Add a new lock entry to the registry.
- * @param {{ target: string, type: "folder"|"app", dmgPath?: string, executableName?: string }} entry
+ * @param {{ target: string, type: "folder"|"app", dmgPath?: string, bundleId?: string }} entry
  */
 export function addEntry(entry) {
   acquireLock();

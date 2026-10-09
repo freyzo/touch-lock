@@ -43,6 +43,7 @@
     "bin/",
     "src/",
     "assets/tlock-logo.webp",
+    "assets/tlock.icns",
     "README.md"
   ],
   "dependencies": {

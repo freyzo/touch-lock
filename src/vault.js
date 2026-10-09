@@ -9,6 +9,7 @@ import {
   scryptSync,
 } from "crypto";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -17,7 +18,7 @@ import {
   rmSync,
   writeFileSync,
 } from "fs";
-import { dirname, join } from "path";
+import { join } from "path";
 import { fileURLToPath } from "url";
 import { TLOCK_STORAGE_DIR, ensureStorageDir } from "./config.js";
 import { BIN } from "./bins.js";
@@ -161,8 +162,8 @@ const HELPER_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>
 `;
-const LOGO_FILE = fileURLToPath(new URL("../assets/tlock-logo.webp", import.meta.url));
-const ICON_SIZES = [16, 32, 128, 256, 512];
+// Shipped with the package, so the password dialog has the logo even before any helper app is built.
+export const TLOCK_ICON = fileURLToPath(new URL("../assets/tlock.icns", import.meta.url));
 
 const HELPER_DIR = join(
   TLOCK_STORAGE_DIR,
@@ -170,7 +171,6 @@ const HELPER_DIR = join(
 );
 const HELPER_APP = join(HELPER_DIR, "tlock.app");
 const HELPER_BINARY = join(HELPER_APP, "Contents", "MacOS", "tlock");
-export const HELPER_ICON = join(HELPER_APP, "Contents", "Resources", "tlock.icns");
 const OLD_HELPER_PATTERN = /^(touchid-helper(-[0-9a-f]{12})?|helper-[0-9a-f]{12})$/;
 
 let helperPath;
@@ -211,23 +211,10 @@ function secureEnclaveHelper() {
 }
 
 export function buildIcon(icnsPath) {
-  const iconset = join(dirname(icnsPath), "tlock.iconset");
   try {
-    mkdirSync(iconset, { recursive: true });
-    for (const size of ICON_SIZES) {
-      for (const scale of [1, 2]) {
-        const pixels = String(size * scale);
-        const name = `icon_${size}x${size}${scale === 2 ? "@2x" : ""}.png`;
-        execFileSync(BIN.sips, ["-s", "format", "png", "-z", pixels, pixels, LOGO_FILE, "--out", join(iconset, name)], {
-          stdio: "ignore",
-        });
-      }
-    }
-    execFileSync(BIN.iconutil, ["-c", "icns", iconset, "-o", icnsPath], { stdio: "ignore" });
+    copyFileSync(TLOCK_ICON, icnsPath);
   } catch {
     // macOS falls back to a generic icon.
-  } finally {
-    rmSync(iconset, { recursive: true, force: true });
   }
 }
 

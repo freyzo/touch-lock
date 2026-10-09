@@ -18,7 +18,7 @@ import {
   imageKeyPath,
   writeImageKey,
   readImageKey,
-  HELPER_ICON,
+  TLOCK_ICON,
 } from "./vault.js";
 
 const AUTH_FAILURES_FILE = join(TLOCK_STORAGE_DIR, ".auth-failures");
@@ -118,7 +118,7 @@ function migrateLegacyLocks(vmk) {
  */
 function promptPasswordDialog(message) {
   const label = message.trim().replace(/:$/, "");
-  const icon = existsSync(HELPER_ICON) ? `POSIX file "${HELPER_ICON.replace(/[\\"]/g, "\\$&")}"` : "caution";
+  const icon = existsSync(TLOCK_ICON) ? `POSIX file "${TLOCK_ICON.replace(/[\\"]/g, "\\$&")}"` : "caution";
   try {
     const answer = execFileSync(BIN.osascript, [
       "-e",

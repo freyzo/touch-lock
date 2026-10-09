@@ -140,6 +140,14 @@ export function renderHelp({ usage, summary, sections, footer }) {
   return `${out.join("\n")}\n`;
 }
 
+/** A path the user can paste back into the shell: ~ for home, quoted if it has spaces. */
+export function shellPath(path) {
+  const shown = displayPath(path);
+  if (!/[\s'"()&;$]/.test(shown)) return shown;
+  // ~ only expands outside quotes, so quote just the part after it.
+  return shown.startsWith("~/") ? `~/"${shown.slice(2)}"` : `"${shown}"`;
+}
+
 export function displayPath(p) {
   const home = process.env.HOME;
   const s = String(p);
@@ -305,7 +313,7 @@ function drawStacked(title, rows, width) {
  * columns with a `drop` rank go first (highest first), and below that each row becomes a block.
  * title: string or [title, detail]; columns: [{ header, min, drop? }]; rows: [[{ text, style? }]].
  */
-export function renderTable(title, columns, rows) {
+function renderTable(title, columns, rows) {
   const width = terminalColumns();
   let active = columns.map((_, i) => i);
   const pick = (row) => active.map((i) => row[i]);
@@ -355,16 +363,12 @@ export function printLockedTargets(entries, formatDate, stateOf) {
 /**
  * Summary counts (status command, all targets).
  */
-export function printStatusSummary(folderCount, appCount, total) {
+export function printStatusSummary(folderCount, appCount) {
   console.log();
-  // Apps only appear while a lock from an older tlock is left over.
-  printKv("tlock status", appCount > 0
-    ? [
-        [chalk.dim("Folders"), chalk.green(String(folderCount))],
-        [chalk.dim("Apps"), chalk.green(String(appCount))],
-        [chalk.dim("Total"), chalk.green(String(total))],
-      ]
-    : [[chalk.dim("Locked folders"), chalk.green(String(folderCount))]]);
+  printKv("tlock status", [
+    [chalk.dim("Folders"), chalk.green(String(folderCount))],
+    [chalk.dim("Apps"), chalk.green(String(appCount))],
+  ]);
   console.log();
 }
 

@@ -7,8 +7,6 @@ export const BIN = {
   plutil: "/usr/bin/plutil",
   open: "/usr/bin/open",
   swiftc: "/usr/bin/swiftc",
-  sips: "/usr/bin/sips",
-  iconutil: "/usr/bin/iconutil",
   codesign: "/usr/bin/codesign",
   qlmanage: "/usr/bin/qlmanage",
   defaults: "/usr/bin/defaults",
