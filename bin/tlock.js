@@ -8,7 +8,7 @@ import { createInterface } from "readline";
 import { fileURLToPath } from "url";
 import { basename, dirname, join, resolve } from "path";
 import { lockFolder, unlockFolder, removeFolder, shredFolder, lockAllFolders, isMountPoint } from "../src/lock-folder.js";
-import { lockApp, unlockApp, removeApp, isAppLocked } from "../src/lock-app.js";
+import { unlockApp, removeApp, isAppLocked } from "../src/lock-app.js";
 import { authenticate, replaceVault } from "../src/auth.js";
 import {
   getLockRegistry,
@@ -383,17 +383,17 @@ function mainHelp() {
   return renderHelp({
     usage: ["tlock [OPTION]... TARGET", "tlock COMMAND [OPTION]... [TARGET]"],
     summary: [
-      "Lock folders and apps behind Touch ID on macOS.",
-      "With no COMMAND, lock TARGET: a folder path or an app name.",
+      "Lock folders behind Touch ID on macOS.",
+      "With no COMMAND, lock TARGET, a folder path.",
     ],
     sections: [
       {
         title: "Commands",
         items: [
-          ["unlock, -u TARGET", "open a locked folder, or launch a locked app"],
+          ["unlock, -u TARGET", "open a locked folder"],
           ["remove, -r TARGET", "remove the lock and restore TARGET"],
           ["shred, -s FOLDER", "destroy a locked folder for good"],
-          ["list", "list locked folders and apps"],
+          ["list", "list locked folders"],
           ["status [TARGET]", "show whether TARGET is locked, or totals"],
           ["autolock", "show or change when open folders lock themselves"],
           ["reset", "set a new recovery passphrase if you forgot it"],
@@ -412,7 +412,7 @@ function mainHelp() {
         title: "Examples",
         items: [
           ["tlock ~/Taxes", "lock a folder"],
-          ['tlock "Brave Browser"', "lock an app"],
+          ["tlock -r ~/Taxes", "turn ~/Taxes back into a normal folder"],
           ["tlock -u ~/Taxes --for 30m", "open a folder for 30 minutes"],
         ],
       },
@@ -437,10 +437,10 @@ program.configureHelp({
 
 program
   .name("tlock")
-  .description("lock folders and apps behind Touch ID on macOS")
+  .description("lock folders behind Touch ID on macOS")
   .version(VERSION, "-v, --version", "output version information and exit")
   .helpOption("-h, --help", "display this help and exit")
-  .option("-u, --unlock <TARGET>", "open a locked folder, or launch a locked app")
+  .option("-u, --unlock <TARGET>", "open a locked folder")
   .option("--for <DURATION>", "with unlock: lock again after DURATION (30m, 2h)")
   .option("-a, --all", "lock every open folder")
   .option("-r, --remove <TARGET>", "remove the lock and restore TARGET")
@@ -453,7 +453,7 @@ program.helpInformation = mainHelp;
 
 // Default command: lock a target
 program
-  .argument("[TARGET]", "folder path or app name to lock")
+  .argument("[TARGET]", "folder path to lock")
   .action(
     withErrorHandling(async (target) => {
       const options = program.opts();
@@ -488,7 +488,12 @@ program
 
       const targetType = detectTargetType(target);
       if (targetType === "app") {
-        await lockApp(target);
+        throw new Error(
+          "App locking is turned off in this version\n" +
+            "Locking an app modified it, and some apps (Brave, for one) lost their extensions.\n" +
+            "A safer app lock that leaves apps untouched is planned. Folder locking works as before.\n" +
+            `To remove an app lock made by an older tlock: tlock -r "${basename(target, ".app")}"`
+        );
       } else if (targetType === "folder") {
         await lockFolder(target);
       } else {
@@ -503,7 +508,7 @@ program
 program
   .command("unlock <TARGET>")
   .usage("[OPTION]... TARGET")
-  .description("open a locked folder, or launch a locked app")
+  .description("open a locked folder")
   .option("--for <DURATION>", "lock the folder again after DURATION (30m, 2h)")
   .action(withErrorHandling((target, options) => runUnlock(target, options.for ?? program.opts().for)));
 
@@ -511,7 +516,7 @@ program
 program
   .command("list")
   .usage("[OPTION]...")
-  .description("list locked folders and apps")
+  .description("list locked folders")
   .action(
     withErrorHandling(async () => {
       const entries = getLockRegistry();

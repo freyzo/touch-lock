@@ -5,8 +5,8 @@
 <h1 align="center">tlock</h1>
 
 <p align="center">
-  <em>Lock folders and apps with Touch ID on macOS</em><br />
-  <em>Encrypted disk images for folders, biometric gate for apps</em>
+  <em>Lock folders with Touch ID on macOS</em><br />
+  <em>Encrypted disk images, opened with your fingerprint</em>
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@ The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). 
 
 - **`tlock`** is one CLI:
   - **Folders** → AES-256 encrypted, writable disk image; plain folder removed after the image is created and registered.
-  - **Apps** → wrapper + renamed binary so **Touch ID / password** runs before launch.
+  - **Apps**: turned off in 0.2.1, see [App locking](#apps).
 - **Lock, unlock, remove, and shred** go through **authentication**: Touch ID or your Mac login password, enforced by the Secure Enclave, with a recovery passphrase as fallback. Putting an unlocked folder away again needs none, since it only removes access.
 - Short flags: **`-u`** unlock, **`-r`** remove, **`-s`** shred (same as `unlock` / `remove` / `shred`).
 
@@ -43,7 +43,6 @@ The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). 
 | You want | Command |
 | --- | --- |
 | First-time lock folder | `tlock /path/to/folder` |
-| First-time lock app | `tlock Slack` or `tlock /Applications/Slack.app` |
 | Open locked folder | `tlock unlock /path` or `tlock -u /path` |
 | Open it for a limited time | `tlock unlock /path --for 30m` |
 | Put an unlocked folder away again | `tlock /path` |
@@ -69,7 +68,7 @@ npm i -g @freyzo/tlock
 
 After a global install, tlock prints the same banner and command guide as `tlock -h`.
 
-Or one-off (folders only — app locking needs the global install):
+Or one-off:
 
 ```bash
 npx @freyzo/tlock --help
@@ -87,7 +86,7 @@ tlock [target]
 
 | Arg | Description |
 | --- | --- |
-| `target` | Folder path or app name / `.app` path to lock. Auto-detects folder vs app. Run it again on an unlocked folder to lock it again. |
+| `target` | Folder path to lock. Run it again on an unlocked folder to lock it again. |
 
 **First run:** you create a **recovery passphrase** (12+ characters). It is never stored: day to day you unlock with Touch ID or your Mac login password, and the passphrase is the way back in on a new Mac or if the Secure Enclave key is lost. **Forget it and lose this Mac, and locked folders cannot be recovered.** Forgot it? `tlock reset` sets a new one, but folders locked under the old one stay closed.
 
@@ -141,11 +140,6 @@ tlock unlock ~/Documents/private-notes
 tlock -u ~/Documents/private-notes
 tlock ~/Documents/private-notes          # while unlocked: lock it again
 
-# App
-tlock Slack
-tlock /Applications/Slack.app
-tlock unlock Slack
-
 # Drop tlock for a folder permanently (restores plain folder)
 tlock remove ~/Documents/private-notes
 tlock -r ~/Documents/private-notes
@@ -192,6 +186,10 @@ Checks: lock succeeds → **path gone** while locked → unlock → file content
 tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, and folders inside or containing another locked folder.
 
 ### Apps
+
+> **App locking is turned off in 0.2.1.** It worked by modifying the app, which breaks its code signature, and Chromium browsers such as Brave dropped the user's extensions after being locked. A replacement that leaves apps untouched is planned. `tlock -r "App Name"` still removes an app lock made by 0.2.0 or earlier.
+
+How 0.2.0 and earlier locked apps:
 
 1. `CFBundleExecutable` binary renamed to `<name>.tlock-original`; bash wrapper installed in its place.
 2. Wrapper runs hidden `tlock auth-gate` with the Node.js and tlock paths recorded at lock time → Touch ID / Mac login password, or the recovery passphrase (terminal prompt, or a macOS dialog when launched from Finder / Dock) → `exec` real binary.
