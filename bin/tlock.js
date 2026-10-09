@@ -282,7 +282,7 @@ function runList() {
 async function runUnlock(target, forDuration) {
   const entry = findEntryForTarget(target, "unlock");
   if (!entry) {
-    throw new Error(`No lock found for: ${target}`);
+    throw new Error(`"${displayPath(target)}" is not locked\nSee what is locked: tlock list`);
   }
   if (entry.type !== "folder") {
     if (forDuration) throw new Error("--for only applies to folders.");
@@ -339,7 +339,7 @@ function runAutolock(options) {
 async function runRemove(target, { force = false } = {}) {
   const entry = findEntryForTarget(target, "remove");
   if (!entry) {
-    throw new Error(`No lock found for: ${target}`);
+    throw new Error(`"${displayPath(target)}" is not locked\nSee what is locked: tlock list`);
   }
   if (entry.type === "folder") {
     await removeFolder(entry, { force });
@@ -351,7 +351,7 @@ async function runRemove(target, { force = false } = {}) {
 async function runShred(target) {
   const entry = findEntryForTarget(target, "shred");
   if (!entry) {
-    throw new Error(`No lock found for: ${target}. shred only destroys folders locked by tlock.`);
+    throw new Error(`"${displayPath(target)}" is not locked\nshred only destroys folders locked by tlock. See what is locked: tlock list`);
   }
   if (entry.type !== "folder") {
     throw new Error(`shred works on locked folders only. To unlock an app for good: tlock remove ${entry.target}`);
@@ -568,11 +568,12 @@ program
 
       const targetType = detectTargetType(target);
       if (targetType === "app") {
+        const oldLock = findEntryForTarget(target, "remove");
         throw new Error(
           "App locking is turned off in this version\n" +
             "Locking an app modified it, and some apps (Brave, for one) lost their extensions.\n" +
-            "A safer app lock that leaves apps untouched is planned. Folder locking works as before.\n" +
-            `To remove an app lock made by an older tlock: tlock -r "${basename(target, ".app")}"`
+            "A safer app lock that leaves apps untouched is planned. Folder locking works as before." +
+            (oldLock ? `\nThis app still has a lock from an older tlock. Remove it with: tlock -r "${basename(oldLock.target, ".app")}"` : "")
         );
       } else if (targetType === "folder") {
         await lockFolder(target);

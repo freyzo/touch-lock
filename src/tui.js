@@ -357,11 +357,14 @@ export function printLockedTargets(entries, formatDate, stateOf) {
  */
 export function printStatusSummary(folderCount, appCount, total) {
   console.log();
-  printKv("tlock status", [
-    [chalk.dim("Folders"), chalk.green(String(folderCount))],
-    [chalk.dim("Apps"), chalk.green(String(appCount))],
-    [chalk.dim("Total"), chalk.green(String(total))],
-  ]);
+  // Apps only appear while a lock from an older tlock is left over.
+  printKv("tlock status", appCount > 0
+    ? [
+        [chalk.dim("Folders"), chalk.green(String(folderCount))],
+        [chalk.dim("Apps"), chalk.green(String(appCount))],
+        [chalk.dim("Total"), chalk.green(String(total))],
+      ]
+    : [[chalk.dim("Locked folders"), chalk.green(String(folderCount))]]);
   console.log();
 }
 
