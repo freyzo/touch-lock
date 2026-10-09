@@ -198,14 +198,22 @@ function drawColumns(title, columns, rows, widths, width) {
   return out.join("\n");
 }
 
-/** One block per row for narrow terminals: first two cells on one line if they fit, the rest below. */
+/**
+ * One block per row for narrow terminals. The first two cells share a line only when that fits for
+ * every row, so all blocks keep the same shape; the remaining cells go below, indented.
+ */
 function drawStacked(title, rows, width) {
   const inner = Math.max(10, width - INDENT.length - 1);
+  const cellsOf = (row) => row.filter((cell) => cell.text);
+  const pairFits = rows.every((row) => {
+    const [first, second] = cellsOf(row);
+    return !second || first.text.length + 2 + second.text.length <= inner;
+  });
   const out = titleLines(title, inner).map((text) => INDENT + text);
   for (const row of rows) {
-    const [first, ...rest] = row.filter((cell) => cell.text);
+    const [first, ...rest] = cellsOf(row);
     out.push("");
-    if (rest.length > 0 && first.text.length + 2 + rest[0].text.length <= inner) {
+    if (rest.length > 0 && pairFits) {
       out.push(`${INDENT}${paint(first, first.text)}  ${paint(rest[0], rest[0].text)}`);
       rest.shift();
     } else {

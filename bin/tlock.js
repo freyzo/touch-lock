@@ -312,7 +312,8 @@ function lockState(entry) {
 }
 
 const QUICK_REFERENCE = [
-  ["Lock a folder or app", 'tlock <folder>   tlock "App Name"'],
+  ["Lock a folder", "tlock <folder>"],
+  ["Lock an app", 'tlock "App Name"'],
   ["Open a locked folder", "tlock -u <folder>"],
   ["Open it for a while", "tlock -u <folder> --for 30m"],
   ["Lock it again", "tlock <folder>"],
