@@ -9,3 +9,4 @@ docs/
 
 # Screen recordings — huge; keep GIF for README. Regenerate: ffmpeg -i demo.mov …
 assets/*.mov
+_0/
