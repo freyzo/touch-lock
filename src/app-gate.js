@@ -15,22 +15,53 @@ import AppKit
 import LocalAuthentication
 
 let listPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ""
+// Apps paused and waiting for Touch ID, so a restarted gate can ask again instead of leaving them frozen.
+let heldPath = listPath + ".held"
+
+func readLines(_ path: String) -> [String] {
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+    return text.split(separator: "\\n").map(String.init)
+}
 
 func lockedBundleIDs() -> Set<String> {
-    guard let text = try? String(contentsOfFile: listPath, encoding: .utf8) else { return [] }
-    return Set(text.split(separator: "\\n").map(String.init))
+    Set(readLines(listPath))
 }
 
 final class Gate {
     private var seen = Set<pid_t>()
+    private var held = Set<pid_t>()
     private var observation: NSKeyValueObservation?
+    private var termination: DispatchSourceSignal?
 
     func start() {
-        // Apps already open when the gate starts (e.g. at login, or when the lock was added) keep running.
+        // Apps already open when the gate starts (e.g. at login, or when the lock was added) keep running,
+        // except ones a previous gate paused and never resolved.
         seen = Set(NSWorkspace.shared.runningApplications.map(\\.processIdentifier))
+        let locked = lockedBundleIDs()
+        for pid in readLines(heldPath).compactMap({ pid_t($0) }) {
+            if let app = NSRunningApplication(processIdentifier: pid),
+               let id = app.bundleIdentifier, locked.contains(id) {
+                hold(app)
+            }
+        }
+        saveHeld()
         observation = NSWorkspace.shared.observe(\\.runningApplications, options: [.new]) { [weak self] workspace, _ in
             self?.scan(workspace.runningApplications)
         }
+        // Stopped mid-prompt (lock removed, gate updated): close paused apps rather than leave them frozen.
+        signal(SIGTERM, SIG_IGN)
+        termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        termination?.setEventHandler { [weak self] in
+            self?.held.forEach { kill($0, SIGKILL) }
+            try? FileManager.default.removeItem(atPath: heldPath)
+            exit(0)
+        }
+        termination?.resume()
+    }
+
+    private func saveHeld() {
+        let text = held.map(String.init).joined(separator: "\\n")
+        try? text.write(toFile: heldPath, atomically: true, encoding: .utf8)
     }
 
     private func scan(_ apps: [NSRunningApplication]) {
@@ -45,9 +76,13 @@ final class Gate {
     private func hold(_ app: NSRunningApplication) {
         let pid = app.processIdentifier
         kill(pid, SIGSTOP)
+        held.insert(pid)
+        saveHeld()
         let name = app.localizedName ?? "this app"
         LAContext().evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "open \\u{201C}\\(name)\\u{201D}") { ok, _ in
             DispatchQueue.main.async {
+                self.held.remove(pid)
+                self.saveHeld()
                 if ok {
                     kill(pid, SIGCONT)
                     app.activate()
@@ -181,11 +216,13 @@ function lockedBundleIds() {
  * uninstalled when none is. Rebuilds the gate after a tlock update.
  */
 export function syncAppGate() {
+  gateRunning = undefined;
   const bundleIds = lockedBundleIds();
   if (bundleIds.length === 0) {
     stopAgent();
     rmSync(AGENT_PLIST, { force: true });
     rmSync(APP_LIST, { force: true });
+    rmSync(`${APP_LIST}.held`, { force: true });
     return;
   }
 
@@ -212,16 +249,19 @@ export function syncAppGate() {
 
 /** Cheap check for every tlock run: repair the gate if apps are locked but it is missing or stale. */
 export function healAppGate() {
-  if (lockedBundleIds().length === 0) return;
-  if (readText(AGENT_PLIST) === agentPlist() && existsSync(GATE_BINARY)) return;
   try {
+    if (lockedBundleIds().length === 0) return;
+    if (readText(AGENT_PLIST) === agentPlist() && existsSync(GATE_BINARY)) return;
     syncAppGate();
   } catch {
-    // Reported when the user next locks or removes an app.
+    // Reported by the command itself (e.g. an unreadable config), or when the user next locks or removes an app.
   }
 }
 
-/** True while the gate is installed and running. */
+let gateRunning;
+
+/** True while the gate is installed and running. Checked once per run; syncAppGate refreshes it. */
 export function appGateRunning() {
-  return existsSync(AGENT_PLIST) && agentLoaded();
+  gateRunning ??= existsSync(AGENT_PLIST) && agentLoaded();
+  return gateRunning;
 }

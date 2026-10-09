@@ -28,7 +28,7 @@ import { authenticate, getLegacyPassword } from "./auth.js";
 import { imageKeyPath, writeImageKey, readImageKey } from "./vault.js";
 import { wipeTree, destroyFile, resetQuickLookCache, flushMetadata } from "./shred.js";
 import { BIN } from "./bins.js";
-import { printResult, cmd, displayPath } from "./tui.js";
+import { printResult, cmd, displayPath, shellPath } from "./tui.js";
 
 // Sparse bundle: only used space is stored, in 8 MB bands that Time Machine backs up incrementally.
 const IMAGE_MAX_SIZE = "1t";
@@ -86,6 +86,22 @@ function validateFolderTarget(folderPath) {
     if (isInside(folderPath, entry.target)) {
       throw new Error(`Refusing to lock ${folderPath}: it is inside locked folder ${entry.target}.`);
     }
+  }
+}
+
+/**
+ * Refuse when something new sits at a locked folder's path: mounting would hide it, restoring would overwrite it.
+ * Only call while the folder's own volume is not mounted there.
+ */
+function assertPathFree(folderPath) {
+  if (!existsSync(folderPath)) return;
+  const inUse = !statSync(folderPath).isDirectory() ||
+    readdirSync(folderPath).some((name) => name !== ".DS_Store");
+  if (inUse) {
+    throw new Error(
+      `${displayPath(folderPath)} already exists and is not empty (made while the folder was locked)\n` +
+        "Rename or move it aside, then retry."
+    );
   }
 }
 
@@ -271,14 +287,6 @@ function relockFolder(entry) {
   printResult(`Locked ${displayPath(entry.target)}`);
 }
 
-/** A path the user can paste back into the shell: ~ for home, quoted if it has spaces. */
-function shellPath(path) {
-  const shown = displayPath(path);
-  if (!/[\s'"()&;$]/.test(shown)) return shown;
-  // ~ only expands outside quotes, so quote just the part after it.
-  return shown.startsWith("~/") ? `~/"${shown.slice(2)}"` : `"${shown}"`;
-}
-
 // ─── Public API ─────────────────────────────────────────────────────
 
 /**
@@ -367,6 +375,7 @@ export async function unlockFolder(entry, { autoLockAt } = {}) {
     printResult(`${displayPath(absolutePath)} is already open`);
     return;
   }
+  assertPathFree(absolutePath);
 
   const vmk = await authenticate(`unlock “${basename(absolutePath)}”`);
   const password = imagePassphrase(entry, vmk);
@@ -406,11 +415,16 @@ export async function removeFolder(entry, { force = false } = {}) {
     return;
   }
 
+  const wasOpen = isMountPoint(absolutePath);
+  if (!wasOpen) assertPathFree(absolutePath);
   const vmk = await authenticate(`remove the lock on “${basename(absolutePath)}”`);
   const password = imagePassphrase(entry, vmk);
 
   // A volume left open by `tlock unlock` must be ejected before the image can be attached again.
-  if (isMountPoint(absolutePath)) detach(absolutePath);
+  if (wasOpen) {
+    detach(absolutePath);
+    assertPathFree(absolutePath);
+  }
   mkdirSync(absolutePath, { recursive: true });
 
   const mountPoint = makeTempMountDir();
