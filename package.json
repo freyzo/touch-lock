@@ -12,6 +12,7 @@
   "scripts": {
     "start": "node bin/tlock.js",
     "test:pen": "bash tests/lock-pen-test.sh",
+    "test:gate": "bash tests/app-gate-test.sh",
     "postinstall": "[ \"$npm_config_global\" = \"true\" ] && [ -z \"$CI\" ] && { node bin/tlock.js --help > /dev/tty; } 2>/dev/null || true"
   },
   "engines": {

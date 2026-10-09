@@ -13,6 +13,9 @@ import { buildIcon, runSwiftc } from "./vault.js";
 const GATE_SOURCE = `
 import AppKit
 import LocalAuthentication
+import os
+
+let gateLog = Logger(subsystem: "com.freyzo.tlock", category: "gate")
 
 let listPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ""
 // Apps paused and waiting for Touch ID, so a restarted gate can ask again instead of leaving them frozen.
@@ -79,7 +82,10 @@ final class Gate {
         held.insert(pid)
         saveHeld()
         let name = app.localizedName ?? "this app"
-        LAContext().evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "open \\u{201C}\\(name)\\u{201D}") { ok, _ in
+        LAContext().evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "open \\u{201C}\\(name)\\u{201D}") { ok, error in
+            let id = app.bundleIdentifier ?? name
+            let outcome = ok ? "approved" : "denied (\\(error.map { String(describing: $0) } ?? "no error"))"
+            gateLog.notice("\\(id, privacy: .public) pid \\(pid): \\(outcome, privacy: .public)")
             DispatchQueue.main.async {
                 self.held.remove(pid)
                 self.saveHeld()
