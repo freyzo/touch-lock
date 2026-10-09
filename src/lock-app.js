@@ -150,10 +150,7 @@ export async function lockApp(appNameOrPath) {
     throw error;
   }
 
-  printResult(
-    `Locked ${appName(appPath)}`,
-    isRunning(id) ? ["It is open right now; Touch ID is asked the next time it starts."] : []
-  );
+  printResult(`Locked ${appName(appPath)}${isRunning(id) ? " (from its next launch)" : ""}`);
 }
 
 /**
