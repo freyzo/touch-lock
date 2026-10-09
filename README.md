@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <img src="https://raw.githubusercontent.com/freyzo/touch-lock/main/assets/macos.png" alt="macOS" height="28" />
   <a href="https://github.com/freyzo/touch-lock"><img src="https://img.shields.io/badge/tlock-000000?style=for-the-badge&logo=github&logoColor=white" alt="GitHub" /></a>
   <a href="https://www.npmjs.com/package/@freyzo/tlock"><img src="https://img.shields.io/badge/npm-@freyzo/tlock-CB3837?style=for-the-badge&logo=npm&logoColor=white" alt="npm" /></a>
 </p>
@@ -219,30 +220,6 @@ While a folder is open, a small background process (`tlock autolock-watch`) chec
 - **0.1.x:** after you create the recovery passphrase, existing folder locks are re-keyed automatically and the old master password is deleted from Keychain.
 - **Folders locked before sparse bundles** (`~/.tlock/*.dmg`) open read-only; `*.sparseimage` locks keep working. `tlock -r ~/path`, then `tlock ~/path` moves either to the writable, backup-friendly format.
 - **Apps locked by 0.2.0 or earlier** had their executable swapped for a wrapper script, which broke the signature (Chromium browsers such as Brave dropped their extensions). `tlock -r "App Name"` puts the original back; lock it again to use the gate.
-
-### Files
-
-| Item | Location |
-| --- | --- |
-| Lock registry and settings | `~/.tlock/config.json` |
-| Encrypted images | `~/.tlock/*.sparsebundle` (older locks: `*.sparseimage`, `*.dmg`) |
-| Per-image keys (sealed) | `~/.tlock/*.sparsebundle.key` — keep next to the image |
-| Vault (sealed vault key, no passphrase) | `~/.tlock/vault.json` — rebuilt from the recovery passphrase if lost |
-| Swift helper (Touch ID, brb) | `~/.tlock/helper-<hash>/tlock.app` |
-| App gate (while an app is locked) | `~/.tlock/gate-<hash>/tlock.app`, `~/.tlock/locked-apps`, `~/Library/LaunchAgents/com.freyzo.tlock.gate.plist` |
-| Folders set aside by `tlock reset` | `~/.tlock/reset-<time>/` |
-| Auto-lock watcher | `~/.tlock/autolock.pid` (while a folder is open) |
-| Failed password attempts | `~/.tlock/.auth-failures` |
-| Transient | `~/.tlock/config.lock`, `~/.tlock/mount-*` |
-
-### Testing
-
-Manual round-trips against this checkout (run `npm install` first); both ask for Touch ID:
-
-```bash
-npm run test:pen     # folders: lock → path gone → unlock, read, write → lock again → remove restores every file → shred leaves nothing
-npm run test:gate    # apps (default Brave Browser): approve, cancel, gate crash and stop mid-prompt, grace period
-```
 
 ---
 
