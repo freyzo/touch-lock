@@ -73,18 +73,8 @@ Anyone who sits down at your unlocked Mac can open your private folders and apps
 
 ## Contact
 
-<!-- Custom CSS “pills” get stripped on github.com — badge images render the same everywhere (GitHub, npm, VS Code preview). -->
-
 <p align="center">
-  <a href="https://x.com/freyazou"><img src="https://img.shields.io/badge/X-%40freyazou-1a1a1a?style=plastic&logo=x&logoColor=white" alt="X @freyazou" /></a>
-  &nbsp;
-  <a href="https://github.com/freyzo/touch-lock"><img src="https://img.shields.io/badge/GitHub-touch--lock-24292f?style=plastic&logo=github&logoColor=white" alt="GitHub" /></a>
-  &nbsp;
-  <a href="https://www.linkedin.com/in/freya-zou-068615252/"><img src="https://img.shields.io/badge/LinkedIn-Freya_Zou-0A66C2?style=plastic&logo=linkedin&logoColor=white" alt="LinkedIn" /></a>
+  Made by <a href="https://freyazou.com"><b>Freya Zou</b></a>
   <br /><br />
-  <a href="https://www.youtube.com/channel/UC9pdMpmZ6ZNAakfcZSxaJXQ"><img src="https://img.shields.io/badge/YouTube-channel-FF0000?style=plastic&logo=youtube&logoColor=white" alt="YouTube" /></a>
-  &nbsp;
-  <a href="https://freyazou.com"><img src="https://img.shields.io/badge/Site-freyazou.com-0891b2?style=plastic&logo=googlechrome&logoColor=white" alt="Website" /></a>
-  &nbsp;
-  <a href="https://www.npmjs.com/package/@freyzo/tlock"><img src="https://img.shields.io/badge/npm-%40freyzo%2Ftlock-CB3837?style=plastic&logo=npm&logoColor=white" alt="npm" /></a>
+  <a href="https://x.com/freyazou">X</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://www.linkedin.com/in/freya-zou-068615252/">LinkedIn</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://www.youtube.com/channel/UC9pdMpmZ6ZNAakfcZSxaJXQ">YouTube</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://github.com/freyzo">GitHub</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://freyazou.com">freyazou.com</a>
 </p>
