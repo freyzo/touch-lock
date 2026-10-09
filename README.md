@@ -89,7 +89,7 @@ tlock [target]
 | --- | --- |
 | `target` | Folder path or app name / `.app` path to lock. Auto-detects folder vs app. Run it again on an unlocked folder to lock it again. |
 
-**First run:** you create a **recovery passphrase** (12+ characters). It is never stored: day to day you unlock with Touch ID or your Mac login password, and the passphrase is the way back in on a new Mac or if the Secure Enclave key is lost. **Forget it and lose this Mac, and locked folders cannot be recovered.**
+**First run:** you create a **recovery passphrase** (12+ characters). It is never stored: day to day you unlock with Touch ID or your Mac login password, and the passphrase is the way back in on a new Mac or if the Secure Enclave key is lost. **Forget it and lose this Mac, and locked folders cannot be recovered.** Forgot it? `tlock reset` sets a new one, but folders locked under the old one stay closed.
 
 **Upgrading from 0.1.x:** after you create the recovery passphrase, existing folder locks are re-keyed automatically and the old master password is deleted from Keychain.
 
@@ -108,6 +108,7 @@ tlock shred <target>      # or:  tlock -s <target>
 | `unlock` / `-u` | Folder: authenticate, then mount its image at the original path. `--for 30m` locks it again after that long. App: open it; its wrapper asks for Touch ID / password. |
 | `remove` / `-r` | Authenticate, restore normal folder or app binary, delete the image / wrapper. `--force` forgets a lock whose image or app binary is missing. |
 | `shred` / `-s` | Folder only. Authenticate, eject if open, erase the image's keys (`hdiutil erasekeys`), overwrite the key file, delete the image, and clear Quick Look thumbnails, Recents and the parent's `.DS_Store`. Nothing is restored. |
+| `reset` | Forgot the recovery passphrase: set a new one. Locked folders cannot be opened without the old passphrase, so their images and keys are moved to `~/.tlock/reset-<time>/` (not deleted; moving them back recovers them if the old passphrase turns up) and their locks are forgotten. Locked apps stay locked and use the new passphrase. Asks you to type `reset` first. |
 
 ### Lock everything / auto-lock
 
@@ -200,7 +201,7 @@ tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, 
 ### Authentication
 
 - **Keys, not a yes/no check.** Each image has a random 256-bit key, sealed (AES-256-GCM) by a vault key. The vault key is derived from your recovery passphrase (scrypt) and also sealed to a **Secure Enclave** key created with `.userPresence`: the chip only releases it after Touch ID (any enrolled finger) or your Mac login password. Editing tlock's code or swapping its helper does not get anyone past that.
-- **The prompt** is the standard macOS Touch ID sheet: "tlock is trying to unlock “folder”", with the tlock logo. It comes from a small Swift helper built once into `~/.tlock/helper-<hash>/tlock.app` (needs `swiftc` from the Xcode Command Line Tools).
+- **The prompt** is the standard macOS Touch ID sheet: "tlock is trying to unlock “folder”", with the tlock logo. It comes from a small Swift helper built once into `~/.tlock/helper-<hash>/tlock.app` (needs `swiftc` from the Xcode Command Line Tools; if the selected Xcode cannot build, for example because its license was not accepted after an update, tlock falls back to the Command Line Tools). If the helper cannot be built, tlock says why and uses the recovery passphrase instead.
 - **Recovery passphrase** is asked for when the Secure Enclave is unavailable, or if you cancel the prompt. After 5 wrong passphrases, wait up to a minute. On a new Mac, one correct passphrase sets up Touch ID again.
 - System tools are called by absolute path (`/usr/bin/hdiutil`, …), so a look-alike earlier in `PATH` is never run.
 
