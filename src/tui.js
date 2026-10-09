@@ -1,16 +1,6 @@
 import chalk from "chalk";
 import { basename } from "path";
 
-const B = {
-  tl: "┌",
-  tr: "┐",
-  bl: "└",
-  br: "┘",
-  h: "─",
-  v: "│",
-  lj: "├",
-  rj: "┤",
-};
 const INDENT = "  ";
 
 export function stripAnsi(s) {
@@ -29,7 +19,7 @@ export function terminalColumns() {
 }
 
 function hr(n) {
-  return B.h.repeat(Math.max(0, n));
+  return "─".repeat(Math.max(0, n));
 }
 
 function truncMiddle(s, max) {
@@ -86,54 +76,30 @@ function displayPath(p) {
   return s;
 }
 
-function boxLine(indent, border, inner) {
-  return indent + border(B.v) + " " + inner + " " + border(B.v);
-}
-
 /**
- * Key/value panel, as wide as its content (up to the terminal); long values wrap inside the box.
+ * Borderless key/value panel: a title, then aligned label/value lines. Nothing is drawn out to a
+ * fixed edge, so resizing the window afterwards cannot break it. Long values wrap under themselves;
+ * when the value column would be too narrow, values go on their own line below the label.
  */
-export function printKvBox(title, rows) {
-  const indent = "  ";
-  const border = chalk.green;
-  const titleStyle = chalk.cyan;
-  const cols = terminalColumns();
-  // One spare column so a slightly narrower window does not re-wrap the box.
-  const maxInner = Math.max(8, cols - indent.length - 5);
-  const naturalLabelW = Math.max(4, ...rows.map(([a]) => vlen(a)));
-  const contentW = Math.max(vlen(title), ...rows.map(([, value]) => naturalLabelW + 2 + vlen(value)));
-  const innerW = Math.min(maxInner, contentW);
+export function printKv(title, rows) {
+  const width = Math.max(10, terminalColumns() - INDENT.length - 1);
+  const gap = "  ";
+  const labelW = Math.max(...rows.map(([label]) => vlen(label)));
+  const valueW = width - labelW - gap.length;
 
-  const labelW = Math.min(
-    Math.max(4, ...rows.map(([a]) => vlen(a))),
-    Math.max(4, innerW - 4)
-  );
-
-  const innerLines = [];
+  const lines = [INDENT + chalk.cyan(title), ""];
   for (const [label, value] of rows) {
-    const lbl = fitVisible(label, labelW);
-    const gap = 2;
-    const valueW = innerW - labelW - gap;
-    if (valueW < 8) {
-      for (const chunk of wrapAnsi(`${stripAnsi(label)}  ${value}`, innerW)) {
-        innerLines.push(fitVisible(chunk, innerW));
-      }
+    if (valueW < 12) {
+      lines.push(INDENT + label);
+      lines.push(...wrapAnsi(value, width - 2).map((chunk) => `${INDENT}  ${chunk}`));
       continue;
     }
-    const wrapped = wrapAnsi(value, valueW);
-    wrapped.forEach((chunk, i) => {
-      const prefix = i === 0 ? lbl : " ".repeat(labelW);
-      innerLines.push(fitVisible(`${prefix}${" ".repeat(gap)}${chunk}`, innerW));
+    wrapAnsi(value, valueW).forEach((chunk, i) => {
+      const prefix = i === 0 ? label + " ".repeat(labelW - vlen(label)) : " ".repeat(labelW);
+      lines.push(INDENT + prefix + gap + chunk);
     });
   }
-
-  const top = indent + border(B.tl + hr(innerW + 2) + B.tr);
-  const titleLine = boxLine(indent, border, fitVisible(titleStyle(title), innerW));
-  const sep = indent + border(B.lj + hr(innerW + 2) + B.rj);
-  const body = innerLines.map((line) => boxLine(indent, border, line));
-  const bot = indent + border(B.bl + hr(innerW + 2) + B.br);
-
-  console.log([top, titleLine, sep, ...body, bot].join("\n"));
+  console.log(lines.join("\n"));
 }
 
 function pluralize(count, word) {
@@ -310,7 +276,7 @@ export function printLockedTargets(entries, formatDate, stateOf) {
  */
 export function printStatusSummary(folderCount, appCount, total) {
   console.log();
-  printKvBox("TLOCK STATUS", [
+  printKv("TLOCK STATUS", [
     [chalk.dim("Folders"), chalk.green(String(folderCount))],
     [chalk.dim("Apps"), chalk.green(String(appCount))],
     [chalk.dim("Total"), chalk.green(String(total))],
@@ -330,5 +296,5 @@ export function printEntryStatus(entry, formatDate) {
   if (entry.dmgPath) {
     rows.push([chalk.dim("Image"), chalk.dim(displayPath(entry.dmgPath))]);
   }
-  printKvBox("LOCK STATUS", rows);
+  printKv("LOCK STATUS", rows);
 }

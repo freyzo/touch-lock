@@ -13,7 +13,7 @@ import { getLockRegistry, getEntry, canonicalPath, getSettings, updateSettings }
 import { parseDuration, describeAutoLock, ensureWatcher, runWatcher } from "../src/autolock.js";
 import {
   clockTime,
-  printKvBox,
+  printKv,
   printLockedTargets,
   printStatusSummary,
   printEntryStatus,
@@ -249,7 +249,7 @@ function runAutolock(options) {
   const settings = getSettings();
   const onOff = (value) => (value ? chalk.green("on") : chalk.dim("off"));
   console.log();
-  printKvBox("AUTO-LOCK", [
+  printKv("AUTO-LOCK", [
     [chalk.dim("Screen lock"), onOff(settings.lockOnScreenLock)],
     [chalk.dim("Sleep"), onOff(settings.lockOnSleep)],
     [chalk.dim("Idle"), settings.idleMinutes > 0 ? chalk.green(`${settings.idleMinutes} min`) : chalk.dim("off")],

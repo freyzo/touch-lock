@@ -16,7 +16,7 @@ import chalk from "chalk";
 import { addEntry, getEntry, removeEntry, canonicalPath } from "./config.js";
 import { authenticate } from "./auth.js";
 import { BIN } from "./bins.js";
-import { printKvBox } from "./tui.js";
+import { printKv } from "./tui.js";
 
 const ORIGINAL_BINARY_SUFFIX = ".tlock-original";
 const WRAPPER_HEADER = "#!/bin/bash\n# tlock wrapper";
@@ -230,7 +230,7 @@ export async function lockApp(appNameOrPath) {
     installWrapper(binaryPath, renamedBinaryPath, { moveOriginal: false });
     if (!existing) addEntry({ target: appPath, type: "app", executableName });
     console.log();
-    printKvBox("LOCKED APP", [
+    printKv("LOCKED APP", [
       [chalk.dim("App"), chalk.green(basename(appPath))],
       [chalk.dim("Note"), chalk.dim("Already locked — wrapper refreshed.")],
     ]);
@@ -262,7 +262,7 @@ export async function lockApp(appNameOrPath) {
   }
 
   console.log();
-  printKvBox("LOCKED APP", [
+  printKv("LOCKED APP", [
     [chalk.dim("App"), chalk.green(basename(appPath))],
     [chalk.dim("Note"), chalk.dim("Touch ID or password required before launch.")],
   ]);
@@ -284,7 +284,7 @@ export function unlockApp(entry) {
   }
 
   console.log();
-  printKvBox("LAUNCH", [
+  printKv("LAUNCH", [
     [chalk.dim("App"), chalk.green(basename(appPath))],
     [chalk.dim("Note"), chalk.dim("Authenticate in the tlock prompt.")],
   ]);
@@ -323,5 +323,5 @@ export async function removeApp(entry, { force = false } = {}) {
   removeEntry(appPath);
 
   console.log();
-  printKvBox("UNLOCKED APP", [[chalk.dim("App"), chalk.green(basename(appPath))]]);
+  printKv("UNLOCKED APP", [[chalk.dim("App"), chalk.green(basename(appPath))]]);
 }

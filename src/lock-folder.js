@@ -28,7 +28,7 @@ import { authenticate, getLegacyPassword } from "./auth.js";
 import { imageKeyPath, writeImageKey, readImageKey } from "./vault.js";
 import { wipeTree, destroyFile, resetQuickLookCache, flushMetadata } from "./shred.js";
 import { BIN } from "./bins.js";
-import { printKvBox } from "./tui.js";
+import { printKv } from "./tui.js";
 
 // Sparse bundle: only used space is stored, in 8 MB bands that Time Machine backs up incrementally.
 const IMAGE_MAX_SIZE = "1t";
@@ -269,7 +269,7 @@ function relockFolder(entry) {
   ejectFolder(entry);
 
   console.log();
-  printKvBox("LOCKED FOLDER", [
+  printKv("LOCKED FOLDER", [
     [chalk.dim("Path"), chalk.green(entry.target)],
     [chalk.dim("Image"), chalk.dim(entry.dmgPath)],
   ]);
@@ -348,7 +348,7 @@ export async function lockFolder(folderPath) {
   console.log(chalk.dim("  Original folder overwritten and removed"));
 
   console.log();
-  printKvBox("LOCKED FOLDER", [
+  printKv("LOCKED FOLDER", [
     [chalk.dim("Path"), chalk.green(absolutePath)],
     [chalk.dim("Image"), chalk.dim(imagePath)],
   ]);
@@ -383,7 +383,7 @@ export async function unlockFolder(entry, { autoLockAt } = {}) {
   updateEntry(absolutePath, { autoLockAt });
 
   console.log();
-  printKvBox("UNLOCKED FOLDER", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
+  printKv("UNLOCKED FOLDER", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
   if (entry.dmgPath.endsWith(".dmg")) {
     console.log(chalk.yellow(
       `  This lock was made by an older tlock and opens read-only. To make it writable: tlock remove ${absolutePath}, then tlock ${absolutePath}.`
@@ -447,7 +447,7 @@ export async function removeFolder(entry, { force = false } = {}) {
   removeEntry(absolutePath);
 
   console.log();
-  printKvBox("RESTORED", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
+  printKv("RESTORED", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
 }
 
 /**
@@ -473,7 +473,7 @@ export async function shredFolder(entry) {
   flushMetadata(absolutePath);
 
   console.log();
-  printKvBox("SHREDDED", [
+  printKv("SHREDDED", [
     [chalk.dim("Path"), chalk.red(absolutePath)],
     [chalk.dim("Note"), chalk.dim("Image keys erased, key file overwritten, image deleted.")],
   ]);
