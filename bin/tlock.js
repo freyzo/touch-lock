@@ -394,7 +394,7 @@ function mainHelp() {
           ["remove, -r TARGET", "remove the lock and restore TARGET"],
           ["shred, -s FOLDER", "destroy a locked folder for good"],
           ["list", "list locked folders and apps"],
-          ["status [TARGET]", "show whether TARGET is locked; with no TARGET, totals"],
+          ["status [TARGET]", "show whether TARGET is locked, or totals"],
           ["autolock", "show or change when open folders lock themselves"],
           ["reset", "set a new recovery passphrase if you forgot it"],
         ],
