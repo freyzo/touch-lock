@@ -14,175 +14,113 @@
   <a href="https://www.npmjs.com/package/@freyzo/tlock"><img src="https://img.shields.io/badge/npm-@freyzo/tlock-CB3837?style=for-the-badge&logo=npm&logoColor=white" alt="npm" /></a>
 </p>
 
-**Install the CLI globally** so `tlock` is on your PATH:
-
-`npm i -g @freyzo/tlock`
-
-The npm package page sidebar often shows `npm i @freyzo/tlock` (local install). For this tool you want **`-g`**; otherwise the `tlock` command may not be available in your shell.
-
----
-
-## About
-
-**Problem**
-
-- You want **local** protection for sensitive folders and apps without juggling Disk Utility every time.
-- You want a deliberate, **identity-checked** step (Touch ID) before a sensitive folder appears on disk or a sensitive app opens. This is not a defense against malware running as your user; see [Security notes](#security-notes).
-- You need a **simple loop**: lock → unlock when needed → lock again when done → data stays in an encrypted volume until next unlock.
-
-**Solution**
-
-- **`tlock`** is one CLI:
-  - **Folders** → AES-256 encrypted, writable disk image; plain folder removed after the image is created and registered.
-  - **Apps** → paused at launch until **Touch ID / password**; the app itself is never modified.
-- **Lock, unlock, remove, and shred** go through **authentication**: Touch ID or your Mac login password, enforced by the Secure Enclave, with a recovery passphrase as fallback. Putting an unlocked folder away again needs none, since it only removes access.
-- Short flags: **`-u`** unlock, **`-r`** remove, **`-s`** shred (same as `unlock` / `remove` / `shred`), **`-a`** lock all open folders, **`-v`** version, **`-h`** help.
-
-**Summary**
-
-| You want | Command |
-| --- | --- |
-| First-time lock folder | `tlock /path/to/folder` |
-| Lock an app | `tlock "Brave Browser"` |
-| Stop locking an app | `tlock -r "Brave Browser"` |
-| Open locked folder | `tlock unlock /path` or `tlock -u /path` |
-| Open it for a limited time | `tlock unlock /path --for 30m` |
-| Put an unlocked folder away again | `tlock /path` |
-| Lock every unlocked folder now | `tlock --all` or `tlock -a` |
-| Choose when folders lock themselves | `tlock autolock` |
-| Step away, keep agents running | `tlock brb` |
-| Stop using tlock on folder (restore normal folder) | `tlock remove /path` or `tlock -r /path` |
-| Destroy a locked folder for good (no restore) | `tlock shred /path` or `tlock -s /path` |
-| Forget a lock whose image or app is gone | `tlock remove --force /path` |
-| List locks | `tlock list` |
-| Summary / detail | `tlock status` or `tlock status /path` |
-| Forgot the recovery passphrase | `tlock reset` |
-
-> Requires **macOS** (darwin), **Node.js ≥ 18**, and the **Xcode Command Line Tools** (`xcode-select --install`), which tlock uses once to build its small Touch ID helpers.
-
----
-
-## Install
-
-Use **global** install (required for the `tlock` command):
-
 ```bash
 npm i -g @freyzo/tlock
 ```
 
-After a global install, tlock prints the same banner and command guide as `tlock -h`.
-
-Or one-off:
-
-```bash
-npx @freyzo/tlock --help
-```
-
 ---
 
-## Usage
+## Problem
 
-### Main command (lock)
+- Some folders (taxes, contracts, private notes) and some apps (a browser with your sessions, a chat app) should not be one click away for anyone who sits down at your unlocked Mac.
+- macOS has the pieces (encrypted disk images, Touch ID) but no simple loop: **lock → unlock with your finger when needed → lock again when done**.
+- And when you step away for ten minutes while agents, builds or terminals are running, you want everything locked **without stopping the work**.
 
-```bash
-tlock [target]
-```
+## Why tlock
 
-| Arg | Description |
+| Instead of | tlock gives you |
 | --- | --- |
-| `target` | Folder path or app name to lock, in any capitalization. Quotes around names with spaces are optional when the name matches a real folder or app. Run it again on an unlocked folder to lock it again. |
+| Disk Utility images and passwords typed by hand | One command per step; Touch ID or your Mac password, with a recovery passphrase as backup |
+| App lockers that patch or wrap the app | Apps are **never modified**: signatures, extensions and keychain items stay intact |
+| A yes/no Touch ID check in front of a plain file | Real keys: a folder cannot be decrypted without the Secure Enclave (your finger or Mac password) or the recovery passphrase |
+| Remembering to lock things again | Auto-lock on screen lock, sleep, idle, or a timer; `tlock brb` when you step away |
 
-**First run:** you create a **recovery passphrase** (12+ characters). It is never stored: day to day you unlock with Touch ID or your Mac login password, and the passphrase is the way back in on a new Mac or if the Secure Enclave key is lost. **Forget it and lose this Mac, and locked folders cannot be recovered.** Forgot it? `tlock reset` sets a new one, but folders locked under the old one stay closed.
+It is a deliberate, identity-checked step for a Mac you share a desk with. It is not protection against malware running as your user; see [Security model](#security-model).
 
-**Upgrading from 0.1.x:** after you create the recovery passphrase, existing folder locks are re-keyed automatically and the old master password is deleted from Keychain.
+## How it works
 
-A folder named like a subcommand (`list`, `status`, `unlock`, `remove`, `shred`, `autolock`, `brb`, `reset`) must be passed as a path, e.g. `tlock ./list`.
+### System design
 
-### Unlock / remove / shred (long or short)
-
-```bash
-tlock unlock <target>     # or:  tlock -u <target>
-tlock remove <target>     # or:  tlock -r <target>
-tlock shred <target>      # or:  tlock -s <target>
+```
+                                tlock CLI (Node.js)
+               registry: ~/.tlock/config.json  ·  auto-lock watcher
+               │                         │                         │
+      folders  │                   apps  │                    brb  │
+               ▼                         ▼                         ▼
+    ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
+    │ Swift helper         │  │ App gate             │  │ Swift helper         │
+    │ Touch ID → Secure    │  │ LaunchAgent, watches │  │ locks the screen,    │
+    │ Enclave → vault key  │  │ every app launch     │  │ keeps the Mac awake  │
+    └──────────┬───────────┘  └──────────┬───────────┘  └──────────────────────┘
+               ▼                         ▼
+    per-image key → hdiutil   pause → Touch ID → resume or close
+    AES-256 sparse bundle
 ```
 
-| Command | Description |
-| --- | --- |
-| `unlock` / `-u` | Folder: authenticate, then mount its image at the original path. `--for 30m` locks it again after that long. App: open it; tlock's app gate asks for Touch ID / password. |
-| `remove` / `-r` | Authenticate, then restore a normal folder (and delete its image) or stop gating an app. `--force` forgets a lock whose image or app is missing. |
-| `shred` / `-s` | Folder only. Authenticate, eject if open, erase the image's keys (`hdiutil erasekeys`), overwrite the key file, delete the image, and clear Quick Look thumbnails, Recents and the parent's `.DS_Store`. Nothing is restored. |
+### Folders
 
-### Lock everything / auto-lock
-
-```bash
-tlock --all                        # or: tlock -a — lock every unlocked folder now
-tlock unlock <folder> --for 30m    # lock again after 30 minutes (also 90s, 2h)
-tlock autolock                     # show settings
-tlock autolock --idle 15m          # lock after 15 min without keyboard/mouse input (or: off)
-tlock autolock --screen-lock on    # lock when the screen locks or another user switches in
-tlock autolock --sleep on          # lock when the Mac sleeps
-tlock autolock --app-grace 10m     # reopen a locked app within 10 min of quitting it without Touch ID (or: off)
+```
+tlock ~/Taxes            copy into a new AES-256 sparse bundle, then wipe the original
+tlock unlock ~/Taxes     Touch ID → vault key → image key → mounted again at ~/Taxes
+tlock ~/Taxes            ejected (also: tlock --all, or auto-lock)
 ```
 
-Defaults: screen lock **on**, sleep **on**, idle **15 min**. While a folder is unlocked, a small background process (`tlock autolock-watch`) checks every 5 seconds and exits once nothing is unlocked. It never force-ejects: if files on the volume are in use, it shows a notification once and retries. `tlock --all` does the same and lists any folder it could not lock.
+1. `hdiutil` creates an AES-256 encrypted, writable APFS sparse bundle (`~/.tlock/<name>-<hash>.sparsebundle`) with its own random key, and `ditto` copies the folder in. Only used space is stored, in 8 MB pieces, so Time Machine backs up just the pieces that changed.
+2. The lock is registered, then every file in the original folder is overwritten with random bytes and the folder is removed.
+3. `tlock unlock` attaches the image at the original path, hidden from the Desktop and Finder sidebar (`-nobrowse`); the folder opens normally from its own location.
+4. `tlock <path>`, `tlock --all`, or auto-lock puts it away. Auto-lock never force-ejects: if files on the volume are in use, it shows a notification once and retries.
 
-### Stepping away: `tlock brb`
+tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, and folders inside or containing another locked folder.
 
-```bash
-tlock brb    # lock open folders and the screen; agents keep running until you unlock
+### Apps
+
+```
+you open Brave → app gate sees the launch → pauses it → Touch ID / Mac password
+                                                         ├─ pass   → app continues
+                                                         └─ cancel → app is closed
 ```
 
-For a short break while agents, builds or terminals are working:
+1. `tlock "App Name"` records the app's bundle ID and starts tlock's **app gate**, a small background helper (`~/.tlock/gate-<hash>/tlock.app`, run by the LaunchAgent `~/Library/LaunchAgents/com.freyzo.tlock.gate.plist`). No file inside the app changes.
+2. When a locked app starts, the gate pauses it at once and shows the prompt. If the gate itself restarts while an app waits, it asks again; if it is stopped, the waiting app is closed.
+3. **Grace period:** after you pass the prompt, reopening the same app within 10 minutes of quitting it (or opening a second copy while it runs) does not ask again. It ends as soon as the screen locks, the Mac sleeps, or another user switches in, and it is kept only in the gate's memory.
+4. Every decision is logged: `log show --predicate 'subsystem == "com.freyzo.tlock"'`.
+5. When no app is locked, the LaunchAgent is removed.
 
-1. Open tlock folders are locked (one with files in use is left open, with a warning).
-2. The screen locks exactly as with Control-Command-Q. Every app is behind the lock screen; nothing is paused, closed or changed, so running work carries on.
-3. The Mac is kept from idle sleep until you unlock, then allowed to sleep again (at most 12 hours).
-4. Unlock as usual with Touch ID or your password. The terminal prints how long you were away, and warns if the Mac slept anyway.
+### Stepping away (`tlock brb`)
 
-Locking the screen also ends the app grace period, so locked apps ask for Touch ID again. Closing the lid on battery always sleeps the Mac, which pauses everything; leave it open or stay on power.
-
-### Other commands
-
-```bash
-tlock list
-tlock status              # counts
-tlock status <target>     # one entry + image path; exit code 1 if not locked
-tlock reset               # forgot the recovery passphrase: set a new one
-tlock -v                  # version (also --version)
-tlock -h                  # help (also --help); tlock COMMAND -h for one command
+```
+tlock brb → lock open folders → lock the screen (same as Control-Command-Q) + keep the Mac awake
+          … agents, builds and terminals keep running behind the lock screen …
+unlock    → stop keeping the Mac awake → "Back after 11 min"
 ```
 
-`tlock reset` asks you to type `reset` first. Locked folders cannot be opened without the old passphrase, so their images and keys are moved to `~/.tlock/reset-<time>/` (not deleted: moving them back recovers them if the old passphrase turns up) and their locks are forgotten. Locked apps stay locked.
+Nothing is paused, closed or changed. The Mac is kept from idle sleep for at most 12 hours, and only after the screen has really locked.
 
-Typos get a suggestion (`tlock ~/Docments` → `Did you mean: tlock ~/Documents`), and a command typed as a flag (`tlock --list`) points to the command.
+### Keys and authentication
 
-### Examples
+- **Keys, not a yes/no check.** Each image has a random 256-bit key, sealed (AES-256-GCM) by a vault key. The vault key is derived from your recovery passphrase (scrypt) and also sealed to a **Secure Enclave** key created with `.userPresence`: the chip only releases it after Touch ID (any enrolled finger) or your Mac login password. Editing tlock's code or swapping its helper does not get anyone past that.
+- **The prompt** is the standard macOS Touch ID sheet ("tlock is trying to unlock “folder”", or "open “App”"), with the tlock logo. It comes from a small Swift helper built once into `~/.tlock/helper-<hash>/tlock.app` with `swiftc`; if the selected Xcode cannot build (for example its license was not accepted after an update), tlock falls back to the Command Line Tools. If no helper can be built, tlock says why and uses the recovery passphrase.
+- **Opening a locked app** is checked by the app gate with the same prompt (macOS LocalAuthentication); it decides whether the app may run, it does not decrypt anything.
+- **Recovery passphrase** is asked for when the Secure Enclave is unavailable, or if you cancel the prompt. After 5 wrong passphrases, wait up to a minute. On a new Mac, one correct passphrase sets up Touch ID again.
+- System tools are called by absolute path (`/usr/bin/hdiutil`, …), so a look-alike earlier in `PATH` is never run.
 
-```bash
-# Folder
-tlock ~/Documents/private-notes
-tlock unlock ~/Documents/private-notes
-tlock -u ~/Documents/private-notes
-tlock ~/Documents/private-notes          # while unlocked: lock it again
+### Security model
 
-# Drop tlock for a folder permanently (restores plain folder)
-tlock remove ~/Documents/private-notes
-tlock -r ~/Documents/private-notes
+- **Someone at your unlocked Mac with a terminal** cannot open a locked folder without your finger, your Mac login password, or the recovery passphrase. Nothing usable is stored in Keychain.
+- **Not covered:** malware running as you can read a folder *while it is unlocked* (auto-lock keeps that window short), or tamper with tlock and capture a key the next time you authenticate. Only a separate macOS account plus FileVault protects against that.
+- **The app gate is a deterrent, not a barrier:** someone at your unlocked Mac with a terminal can stop it (`launchctl bootout`), and the app's data in `~/Library` is not encrypted.
+- **Copies made before locking** (Time Machine, APFS local snapshots, iCloud / Dropbox versions) still hold the plain folder. Overwriting files before deletion is best effort on SSDs and APFS. Turn on FileVault.
+- **Shred** erases the image's keys and the key file, but copies of `~/.tlock` in backups can still be opened with your recovery passphrase.
 
-# App
-tlock "Brave Browser"                    # quotes optional: tlock Brave Browser
-tlock -u "Brave Browser"                 # open it (Touch ID first)
-tlock -r "Brave Browser"                 # stop locking it
-```
+### Limitations
 
-### Everyday folder loop
-
-1. `tlock unlock ~/path` (or `tlock -u ~/path`) — use files.
-2. Add/change files while unlocked; the volume is writable and grows as needed.
-3. `tlock ~/path` or `tlock --all` when finished — path disappears; data stays in `~/.tlock/*.sparsebundle`. Forget, and auto-lock does it on screen lock, sleep, or idle.
-4. Next time: `tlock unlock` again.
-
-Locks made by older tlock versions (`~/.tlock/*.dmg`) open read-only. To make one writable: `tlock remove ~/path`, then `tlock ~/path`. Locks stored as a single `*.sparseimage` keep working; the same remove-and-lock-again moves one to the backup-friendly sparse bundle format.
+- **macOS only** — `hdiutil`, `LocalAuthentication`, the Secure Enclave.
+- **Apps the Mac needs** (Finder, Dock, System Settings) cannot be locked.
+- **App updates** keep the lock: the gate matches the app's bundle ID, not its files.
+- **Apps open at login or when you lock them** keep running; the gate asks the next time they start.
+- **App window flash** — the gate pauses an app as soon as macOS reports it starting, so its window may show for a moment before the prompt.
+- **Cloud folders** — locking a folder inside iCloud Drive / Dropbox deletes it from the cloud too.
+- **Closing the lid on battery** always sleeps the Mac, which pauses running work even with `tlock brb`.
 
 ---
 
@@ -192,89 +130,119 @@ Locks made by older tlock versions (`~/.tlock/*.dmg`) open read-only. To make on
   <img src="https://raw.githubusercontent.com/freyzo/touch-lock/main/assets/demo.gif" alt="tlock CLI demo — lock, unlock, and list" width="640" />
 </p>
 
-## Testing
-
-Security round-trip against this checkout (run `npm install` first):
-
-```bash
-npm run test:pen
-```
-
-Checks: lock succeeds → **path gone** while locked → unlock → file contents match and the volume is writable → lock again → remove restores every file → lock and shred leave nothing behind. You'll be asked to authenticate five times (the macOS Touch ID sheet with the tlock logo). Like `lok -s`, the shred step also clears Recents.
-
 ---
 
-## How it works
+## Usage
 
-### Folders
+### Install
 
-1. `hdiutil` creates an AES-256 encrypted, writable APFS sparse bundle (`~/.tlock/<name>-<hash>.sparsebundle`) with its own random key, and `ditto` copies the folder in. Only used space is stored, in 8 MB pieces, so Time Machine backs up just the pieces that changed.
-2. The lock is registered, then every file in the original folder is overwritten with random bytes and the folder is removed.
-3. `tlock unlock` attaches the image at the original path, hidden from the Desktop and Finder sidebar (`-nobrowse`); the folder opens normally from its own location.
-4. `tlock <path>`, `tlock --all`, or auto-lock puts it away; the encrypted image stays under `~/.tlock/`.
+```bash
+npm i -g @freyzo/tlock       # -g is needed for the tlock command
+npx @freyzo/tlock --help     # or try it once without installing
+```
 
-tlock refuses to lock `~/.tlock` or any folder containing it, a mounted volume, and folders inside or containing another locked folder.
+Requires **macOS**, **Node.js ≥ 18**, and the **Xcode Command Line Tools** (`xcode-select --install`), which tlock uses once to build its small Swift helpers. The npm page sidebar shows `npm i @freyzo/tlock` without `-g`; that installs it locally and the `tlock` command may not be on your PATH.
+
+### First run
+
+The first lock asks you to create a **recovery passphrase** (12+ characters). It is never stored: day to day you unlock with Touch ID or your Mac login password, and the passphrase is the way back in on a new Mac or if the Secure Enclave key is lost. **Forget it and lose this Mac, and locked folders cannot be recovered.**
+
+### Commands
+
+| You want | Command |
+| --- | --- |
+| Lock a folder | `tlock /path/to/folder` |
+| Open a locked folder | `tlock unlock /path` or `tlock -u /path` |
+| Open it for a limited time | `tlock unlock /path --for 30m` |
+| Put an open folder away again | `tlock /path` |
+| Lock every open folder now | `tlock --all` or `tlock -a` |
+| Lock an app | `tlock "Brave Browser"` |
+| Open a locked app | `tlock -u "Brave Browser"` (or open it as usual) |
+| Step away, keep agents running | `tlock brb` |
+| Choose when things lock themselves | `tlock autolock` |
+| Stop locking a folder (restore it) or an app | `tlock remove /path` or `tlock -r /path` |
+| Destroy a locked folder for good | `tlock shred /path` or `tlock -s /path` |
+| Forget a lock whose image or app is gone | `tlock remove --force /path` |
+| List locks | `tlock list` |
+| Summary, or one lock in detail | `tlock status` or `tlock status /path` (exit code 1 if not locked) |
+| Forgot the recovery passphrase | `tlock reset` |
+| Version / help | `tlock -v` / `tlock -h` (`tlock COMMAND -h` for one command) |
+
+Targets are a folder path or an app name, in any capitalization; quotes around names with spaces are optional when the name matches a real folder or app. A folder named like a subcommand (`list`, `status`, `unlock`, `remove`, `shred`, `autolock`, `brb`, `reset`) must be passed as a path, e.g. `tlock ./list`. Typos get a suggestion (`tlock ~/Docments` → `Did you mean: tlock ~/Documents`).
+
+### Folders, day to day
+
+```bash
+tlock ~/Documents/private-notes          # lock: the folder disappears, the data is encrypted
+tlock -u ~/Documents/private-notes       # Touch ID, then use and change files as usual
+tlock ~/Documents/private-notes          # done: put it away (or let auto-lock do it)
+tlock -r ~/Documents/private-notes       # stop using tlock: restores a normal folder
+tlock -s ~/Documents/private-notes       # or destroy it for good: nothing is restored
+```
+
+`shred` erases the image's keys (`hdiutil erasekeys`), overwrites the key file, deletes the image, and clears Quick Look thumbnails, Recents and the parent's `.DS_Store`.
 
 ### Apps
 
-Apps are **never modified**: no files inside the app change, so its code signature, data, extensions and keychain items stay intact.
+```bash
+tlock "Brave Browser"                    # lock: asks for Touch ID from the next launch
+tlock -r "Brave Browser"                 # stop locking it
+tlock autolock --app-grace 5m            # grace period after quitting (default 10m, or off)
+```
 
-1. `tlock "App Name"` records the app's bundle ID and starts tlock's **app gate**, a small background helper (`~/.tlock/gate-<hash>/tlock.app`, run by the LaunchAgent `~/Library/LaunchAgents/com.freyzo.tlock.gate.plist`).
-2. When a locked app starts, the gate pauses it at once and shows the Touch ID / Mac password prompt. Pass, and the app continues; cancel, and it is closed.
-3. An app that is already open when you lock it keeps running; the prompt comes the next time it starts.
-4. **Grace period:** after you pass the prompt, reopening the same app within 10 minutes of quitting it (or opening a second copy while it runs) does not ask again. The grace period ends as soon as the screen locks, the Mac sleeps, or another user switches in, and it is kept only in the gate's memory. Change it with `tlock autolock --app-grace 5m`, or turn it off with `--app-grace off`.
-5. Every decision is logged: `log show --predicate 'subsystem == "com.freyzo.tlock"'`.
-6. `tlock -r "App Name"` stops gating it. When no app is locked, the LaunchAgent is removed.
+### Stepping away
 
-Locks made by tlock 0.2.0 or earlier modified the app (its executable was swapped for a wrapper script), which broke its signature; Chromium browsers such as Brave dropped their extensions. `tlock -r "App Name"` puts the original executable back; lock it again afterwards to use the gate.
+```bash
+tlock brb
+```
 
-### Authentication
+Open folders are locked (one with files in use is left open, with a warning), the screen locks, and the Mac stays awake so agents and builds keep running. Unlock as usual; the terminal prints how long you were away and warns if the Mac slept anyway.
 
-- **Keys, not a yes/no check.** Each image has a random 256-bit key, sealed (AES-256-GCM) by a vault key. The vault key is derived from your recovery passphrase (scrypt) and also sealed to a **Secure Enclave** key created with `.userPresence`: the chip only releases it after Touch ID (any enrolled finger) or your Mac login password. Editing tlock's code or swapping its helper does not get anyone past that.
-- **The prompt** is the standard macOS Touch ID sheet: "tlock is trying to unlock “folder”" (or "open “App”" for a locked app), with the tlock logo. It comes from a small Swift helper built once into `~/.tlock/helper-<hash>/tlock.app` (needs `swiftc` from the Xcode Command Line Tools; if the selected Xcode cannot build, for example because its license was not accepted after an update, tlock falls back to the Command Line Tools). If the helper cannot be built, tlock says why and uses the recovery passphrase instead.
-- **Opening a locked app** is checked by the app gate with the same Touch ID / Mac password prompt (macOS LocalAuthentication); it decides whether the app may run, it does not decrypt anything.
-- **Recovery passphrase** is asked for when the Secure Enclave is unavailable, or if you cancel the prompt. After 5 wrong passphrases, wait up to a minute. On a new Mac, one correct passphrase sets up Touch ID again.
-- System tools are called by absolute path (`/usr/bin/hdiutil`, …), so a look-alike earlier in `PATH` is never run.
+### Auto-lock
 
----
+```bash
+tlock autolock                     # show settings
+tlock autolock --screen-lock on    # lock folders when the screen locks or another user switches in (default on)
+tlock autolock --sleep on          # lock folders when the Mac sleeps (default on)
+tlock autolock --idle 15m          # lock folders after 15 min without keyboard/mouse input (default 15m, or off)
+tlock unlock <folder> --for 30m    # lock this folder again after 30 minutes (also 90s, 2h)
+```
 
-## Config
+While a folder is open, a small background process (`tlock autolock-watch`) checks every 5 seconds and exits once nothing is open.
+
+### Forgot the recovery passphrase
+
+`tlock reset` asks you to type `reset`, then sets a new passphrase. Locked folders cannot be opened without the old one, so their images and keys are moved to `~/.tlock/reset-<time>/` (not deleted: moving them back recovers them if the old passphrase turns up) and their locks are forgotten. Locked apps stay locked.
+
+### Upgrading from older versions
+
+- **0.1.x:** after you create the recovery passphrase, existing folder locks are re-keyed automatically and the old master password is deleted from Keychain.
+- **Folders locked before sparse bundles** (`~/.tlock/*.dmg`) open read-only; `*.sparseimage` locks keep working. `tlock -r ~/path`, then `tlock ~/path` moves either to the writable, backup-friendly format.
+- **Apps locked by 0.2.0 or earlier** had their executable swapped for a wrapper script, which broke the signature (Chromium browsers such as Brave dropped their extensions). `tlock -r "App Name"` puts the original back; lock it again to use the gate.
+
+### Files
 
 | Item | Location |
 | --- | --- |
-| Lock registry and auto-lock settings | `~/.tlock/config.json` |
+| Lock registry and settings | `~/.tlock/config.json` |
 | Encrypted images | `~/.tlock/*.sparsebundle` (older locks: `*.sparseimage`, `*.dmg`) |
 | Per-image keys (sealed) | `~/.tlock/*.sparsebundle.key` — keep next to the image |
 | Vault (sealed vault key, no passphrase) | `~/.tlock/vault.json` — rebuilt from the recovery passphrase if lost |
-| Touch ID helper | `~/.tlock/helper-<hash>/tlock.app` |
+| Swift helper (Touch ID, brb) | `~/.tlock/helper-<hash>/tlock.app` |
 | App gate (while an app is locked) | `~/.tlock/gate-<hash>/tlock.app`, `~/.tlock/locked-apps`, `~/Library/LaunchAgents/com.freyzo.tlock.gate.plist` |
 | Folders set aside by `tlock reset` | `~/.tlock/reset-<time>/` |
-| Auto-lock watcher | `~/.tlock/autolock.pid` (while a folder is unlocked) |
+| Auto-lock watcher | `~/.tlock/autolock.pid` (while a folder is open) |
 | Failed password attempts | `~/.tlock/.auth-failures` |
-| Registry write lock | `~/.tlock/config.lock` (transient) |
-| Temporary mount points | `~/.tlock/mount-*` (transient) |
+| Transient | `~/.tlock/config.lock`, `~/.tlock/mount-*` |
 
----
+### Testing
 
-## Limitations
+Manual round-trips against this checkout (run `npm install` first); both ask for Touch ID:
 
-- **macOS only** — `hdiutil`, `security`, `LocalAuthentication`.
-- **App lock** — Finder, Dock, System Settings and other apps the Mac needs cannot be locked.
-- **App updates** keep the lock: the gate matches the app's bundle ID, not its files.
-- **Apps open at login or when you lock them** keep running; the gate asks the next time they start.
-- **App window flash** — the gate pauses an app as soon as macOS reports it starting, so its window may show for a moment before the prompt.
-- **Cloud folders** — locking a folder inside iCloud Drive / Dropbox deletes it from the cloud too.
-
----
-
-## Security notes
-
-- Folder images use native AES-256 encryption (`hdiutil`) with a random key per image; nothing usable is stored in Keychain.
-- **Someone at your unlocked Mac with a terminal** cannot open a locked folder without your finger, your Mac login password, or the recovery passphrase.
-- **Not covered:** malware running as you can read a folder *while it is unlocked* (auto-lock keeps that window short), or tamper with tlock and capture a key the next time you authenticate. Only a separate macOS account plus FileVault protects against that.
-- **Copies made before locking** (Time Machine, APFS local snapshots, iCloud / Dropbox versions) still hold the plain folder. Overwriting files before deletion is best effort on SSDs and APFS. Turn on FileVault.
-- **App gate** is a deterrent, not a barrier: someone at your unlocked Mac with a terminal can stop the gate (`launchctl bootout`), and the app's data in `~/Library` is not encrypted.
-- **Shred** erases the image's keys and the key file, but copies of `~/.tlock` in backups can still be opened with your recovery passphrase.
+```bash
+npm run test:pen     # folders: lock → path gone → unlock, read, write → lock again → remove restores every file → shred leaves nothing
+npm run test:gate    # apps (default Brave Browser): approve, cancel, gate crash and stop mid-prompt, grace period
+```
 
 ---
 
