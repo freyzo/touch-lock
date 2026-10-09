@@ -129,12 +129,14 @@ fi
 
 if want 5; then
 echo "== 5) Grace period"
-tlock autolock --app-grace 10m
+# Off for the first launch so it always asks, even if an earlier approval is still in its grace period.
+tlock autolock --app-grace off
 quit_app
 pid=$(launch_paused)
 if [ -z "$pid" ]; then fail "$APP was not paused at launch"; else
   echo "  >> APPROVE the Touch ID prompt"
   if [ "$(wait_outcome)" != running ]; then fail "$APP did not open after approval"; else
+    tlock autolock --app-grace 10m
     sleep 3
     quit_app
     echo "  Reopening within the grace period: there should be NO prompt."
