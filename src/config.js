@@ -113,7 +113,13 @@ export function getLockRegistry() {
  */
 export function getEntry(targetPath) {
   const entries = getLockRegistry();
-  return entries.find((entry) => entry.target === targetPath) || null;
+  // macOS paths ignore case by default, so ~/taxes finds the lock on ~/Taxes.
+  const wanted = targetPath.toLowerCase();
+  return (
+    entries.find((entry) => entry.target === targetPath) ||
+    entries.find((entry) => entry.target.toLowerCase() === wanted) ||
+    null
+  );
 }
 
 /**

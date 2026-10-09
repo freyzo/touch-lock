@@ -178,7 +178,10 @@ function findEntryForTarget(target, command) {
   if (exact) return exact;
   if (target.includes("/")) return null;
 
-  const matches = getLockRegistry().filter((e) => basename(e.target) === target);
+  const matches = getLockRegistry().filter(
+    (e) => basename(e.target).toLowerCase() === target.toLowerCase() ||
+      basename(e.target, ".app").toLowerCase() === target.toLowerCase()
+  );
   if (matches.length > 1) {
     throw new Error(
       `Multiple locks named "${target}". Use the full path:\n  ${matches.map((e) => `tlock ${command} ${e.target}`).join("\n  ")}`
