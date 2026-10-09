@@ -5,14 +5,17 @@
 # 2) cancelling closes the app
 # 3) if the gate crashes mid-prompt, the restarted gate asks again (the app is not left frozen)
 # 4) if the gate is stopped mid-prompt, the app is closed
+# 5) grace period: reopening the app soon after quitting it does not ask again
 set -uo pipefail
 
 # Usage: app-gate-test.sh [APP] [TEST...]   e.g. app-gate-test.sh "Brave Browser" 2
 APP="${1:-Brave Browser}"
 shift || true
-ONLY=" ${*:-1 2 3 4} "
+ONLY=" ${*:-1 2 3 4 5} "
 want() { [[ "$ONLY" == *" $1 "* ]]; }
 SERVICE="gui/$(id -u)/com.freyzo.tlock.gate"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tlock() { node "$REPO_DIR/bin/tlock.js" "$@" >/dev/null; }
 FAILED=0
 
 app_pid() { pgrep -x "$APP" | head -1; }
@@ -21,9 +24,13 @@ paused() { [ -n "$1" ] && ps -o stat= -p "$1" 2>/dev/null | grep -q T; }
 pass() { echo "  PASS: $*"; }
 fail() { echo "  FAIL: $*"; FAILED=1; }
 
+# An app that has only just opened can ignore a quit request, so ask again every 2 seconds.
 quit_app() {
-  osascript -e "quit app \"$APP\"" 2>/dev/null
-  for _ in $(seq 30); do [ -z "$(app_pid)" ] && return; sleep 0.5; done
+  for _ in $(seq 10); do
+    [ -z "$(app_pid)" ] && return
+    osascript -e "quit app \"$APP\"" 2>/dev/null
+    for _ in 1 2 3 4; do [ -z "$(app_pid)" ] && return; sleep 0.5; done
+  done
   pkill -x "$APP"; sleep 2
   [ -z "$(app_pid)" ] || { echo "Could not quit $APP; quit it with Cmd+Q and rerun."; exit 1; }
 }
@@ -50,6 +57,13 @@ wait_outcome() {
 }
 
 [ -n "$(gate_pid)" ] || { echo "The gate is not running. Run: node bin/tlock.js list"; exit 1; }
+
+# Tests 1-4 need a prompt on every launch, so the grace period is off until test 5; restore it on exit.
+ORIGINAL_GRACE=$(node -e 'try { const s = JSON.parse(require("fs").readFileSync(process.argv[1])).settings || {};
+  console.log("appGraceMinutes" in s ? (s.appGraceMinutes > 0 ? s.appGraceMinutes + "m" : "off") : "10m") } catch { console.log("10m") }' \
+  "$HOME/.tlock/config.json")
+trap 'tlock autolock --app-grace "$ORIGINAL_GRACE"' EXIT
+tlock autolock --app-grace off
 
 if want 1; then
 echo "== 1) Approve"
@@ -110,6 +124,27 @@ if [ -z "$pid" ]; then fail "$APP was not paused at launch"; else
   launchctl kill SIGTERM "$SERVICE"
   outcome=$(wait_outcome 20)
   [ "$outcome" = closed ] && pass "$APP was closed when the gate stopped" || fail "expected the app to close, got: $outcome"
+fi
+fi
+
+if want 5; then
+echo "== 5) Grace period"
+tlock autolock --app-grace 10m
+quit_app
+pid=$(launch_paused)
+if [ -z "$pid" ]; then fail "$APP was not paused at launch"; else
+  echo "  >> APPROVE the Touch ID prompt"
+  if [ "$(wait_outcome)" != running ]; then fail "$APP did not open after approval"; else
+    sleep 3
+    quit_app
+    echo "  Reopening within the grace period: there should be NO prompt."
+    open -a "$APP"
+    asked=no
+    for _ in $(seq 20); do pid=$(app_pid); paused "$pid" && asked=yes; sleep 0.3; done
+    if [ -z "$(app_pid)" ]; then fail "$APP did not reopen"
+    elif [ "$asked" = yes ]; then fail "$APP was paused for Touch ID again inside the grace period"
+    else pass "$APP reopened without asking"; fi
+  fi
 fi
 fi
 

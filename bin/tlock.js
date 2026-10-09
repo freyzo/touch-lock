@@ -325,6 +325,9 @@ function runAutolock(options) {
   }
   if (options.sleep !== undefined) patch.lockOnSleep = parseOnOff(options.sleep, "--sleep");
   if (options.screenLock !== undefined) patch.lockOnScreenLock = parseOnOff(options.screenLock, "--screen-lock");
+  if (options.appGrace !== undefined) {
+    patch.appGraceMinutes = options.appGrace === "off" ? 0 : parseDuration(options.appGrace) / 60_000;
+  }
   if (Object.keys(patch).length > 0) {
     updateSettings(patch);
     ensureWatcher();
@@ -337,6 +340,15 @@ function runAutolock(options) {
     [chalk.dim("Screen lock"), onOff(settings.lockOnScreenLock)],
     [chalk.dim("Sleep"), onOff(settings.lockOnSleep)],
     [chalk.dim("Idle"), settings.idleMinutes > 0 ? chalk.green(`${settings.idleMinutes} min`) : chalk.dim("off")],
+  ]);
+  console.log();
+  printKv("Locked apps", [
+    [
+      chalk.dim("Grace period"),
+      settings.appGraceMinutes > 0
+        ? `${chalk.green(`${settings.appGraceMinutes} min`)} ${chalk.dim("after quitting, until the screen locks")}`
+        : chalk.dim("off (ask every launch)"),
+    ],
   ]);
   console.log();
 }
@@ -466,7 +478,7 @@ function mainHelp() {
           ["shred, -s FOLDER", "destroy a locked folder for good"],
           ["list", "list locked folders and apps"],
           ["status [TARGET]", "show whether TARGET is locked, or totals"],
-          ["autolock", "show or change when open folders lock themselves"],
+          ["autolock", "show or change auto-lock and the app grace period"],
           ["reset", "set a new recovery passphrase if you forgot it"],
         ],
       },
@@ -621,10 +633,11 @@ program
 program
   .command("autolock")
   .usage("[OPTION]...")
-  .description("show or change when open folders lock themselves")
+  .description("show or change when open folders lock themselves, and the app grace period")
   .option("--idle <DURATION>", "lock after DURATION without input (15m), or off")
   .option("--sleep <on|off>", "lock when the Mac sleeps")
   .option("--screen-lock <on|off>", "lock when the screen locks")
+  .option("--app-grace <DURATION>", "reopen a locked app within DURATION of quitting without Touch ID (10m), or off")
   .action(withErrorHandling(async (options) => runAutolock(options)));
 
 // reset

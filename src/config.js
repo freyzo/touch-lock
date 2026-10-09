@@ -21,7 +21,7 @@ const LOCK_STALE_MS = 5_000;
 const LOCK_MAX_WAIT_MS = 10_000;
 const sleepCell = new Int32Array(new SharedArrayBuffer(4));
 
-const DEFAULT_SETTINGS = { idleMinutes: 15, lockOnSleep: true, lockOnScreenLock: true };
+const DEFAULT_SETTINGS = { idleMinutes: 15, lockOnSleep: true, lockOnScreenLock: true, appGraceMinutes: 10 };
 
 /**
  * Create ~/.tlock (owner-only) if needed.
@@ -182,7 +182,8 @@ export function updateEntry(targetPath, patch) {
 }
 
 /**
- * Auto-lock settings: { idleMinutes (0 = off), lockOnSleep, lockOnScreenLock }.
+ * Auto-lock settings: { idleMinutes (0 = off), lockOnSleep, lockOnScreenLock, appGraceMinutes (0 = off) }.
+ * The app gate reads appGraceMinutes from config.json itself; keep its default in step with src/app-gate.js.
  */
 export function getSettings() {
   return { ...DEFAULT_SETTINGS, ...readConfig().settings };

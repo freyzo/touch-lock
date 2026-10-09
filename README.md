@@ -120,6 +120,7 @@ tlock autolock                     # show settings
 tlock autolock --idle 15m          # lock after 15 min without keyboard/mouse input (or: off)
 tlock autolock --screen-lock on    # lock when the screen locks or another user switches in
 tlock autolock --sleep on          # lock when the Mac sleeps
+tlock autolock --app-grace 10m     # reopen a locked app within 10 min of quitting it without Touch ID (or: off)
 ```
 
 Defaults: screen lock **on**, sleep **on**, idle **15 min**. While a folder is unlocked, a small background process (`tlock autolock-watch`) checks every 5 seconds and exits once nothing is unlocked. It never force-ejects: if files on the volume are in use, it shows a notification once and retries. `tlock --all` does the same and lists any folder it could not lock.
@@ -205,7 +206,9 @@ Apps are **never modified**: no files inside the app change, so its code signatu
 1. `tlock "App Name"` records the app's bundle ID and starts tlock's **app gate**, a small background helper (`~/.tlock/gate-<hash>/tlock.app`, run by the LaunchAgent `~/Library/LaunchAgents/com.freyzo.tlock.gate.plist`).
 2. When a locked app starts, the gate pauses it at once and shows the Touch ID / Mac password prompt. Pass, and the app continues; cancel, and it is closed.
 3. An app that is already open when you lock it keeps running; the prompt comes the next time it starts.
-4. `tlock -r "App Name"` stops gating it. When no app is locked, the LaunchAgent is removed.
+4. **Grace period:** after you pass the prompt, reopening the same app within 10 minutes of quitting it (or opening a second copy while it runs) does not ask again. The grace period ends as soon as the screen locks, the Mac sleeps, or another user switches in, and it is kept only in the gate's memory. Change it with `tlock autolock --app-grace 5m`, or turn it off with `--app-grace off`.
+5. Every decision is logged: `log show --predicate 'subsystem == "com.freyzo.tlock"'`.
+6. `tlock -r "App Name"` stops gating it. When no app is locked, the LaunchAgent is removed.
 
 Locks made by tlock 0.2.0 or earlier modified the app (its executable was swapped for a wrapper script), which broke its signature; Chromium browsers such as Brave dropped their extensions. `tlock -r "App Name"` puts the original executable back; lock it again afterwards to use the gate.
 

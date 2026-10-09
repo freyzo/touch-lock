@@ -30,9 +30,23 @@ func lockedBundleIDs() -> Set<String> {
     Set(readLines(listPath))
 }
 
+// Read on every launch, so tlock autolock --app-grace applies without restarting the gate.
+let configPath = (listPath as NSString).deletingLastPathComponent + "/config.json"
+
+func graceSeconds() -> TimeInterval {
+    guard let data = FileManager.default.contents(atPath: configPath),
+          let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let settings = config["settings"] as? [String: Any],
+          let minutes = settings["appGraceMinutes"] as? Double else { return 10 * 60 }
+    return max(0, minutes) * 60
+}
+
 final class Gate {
     private var seen = Set<pid_t>()
     private var held = Set<pid_t>()
+    // Grace period, in memory only: running apps that passed Touch ID, and when the last one of each app quit.
+    private var approved = [pid_t: String]()
+    private var lastQuit = [String: Date]()
     private var observation: NSKeyValueObservation?
     private var termination: DispatchSourceSignal?
 
@@ -60,6 +74,33 @@ final class Gate {
             exit(0)
         }
         termination?.resume()
+
+        // The grace period ends whenever the Mac is left: screen lock, sleep, or another user switching in.
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
+        ) { [weak self] _ in self?.endGrace("screen locked") }
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.endGrace("sleep")
+        }
+        workspace.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.endGrace("user switched")
+        }
+    }
+
+    private func endGrace(_ reason: String) {
+        guard !approved.isEmpty || !lastQuit.isEmpty else { return }
+        approved.removeAll()
+        lastQuit.removeAll()
+        gateLog.notice("grace period ended: \\(reason, privacy: .public)")
+    }
+
+    private func inGrace(_ id: String) -> Bool {
+        let grace = graceSeconds()
+        guard grace > 0 else { return false }
+        if approved.values.contains(id) { return true }
+        if let quit = lastQuit[id], Date().timeIntervalSince(quit) < grace { return true }
+        return false
     }
 
     private func saveHeld() {
@@ -68,11 +109,22 @@ final class Gate {
     }
 
     private func scan(_ apps: [NSRunningApplication]) {
-        seen.formIntersection(Set(apps.map(\\.processIdentifier)))
+        let running = Set(apps.map(\\.processIdentifier))
+        seen.formIntersection(running)
+        for (pid, id) in approved where !running.contains(pid) {
+            approved[pid] = nil
+            lastQuit[id] = Date()
+        }
         let locked = lockedBundleIDs()
         for app in apps where !seen.contains(app.processIdentifier) {
             seen.insert(app.processIdentifier)
-            if let id = app.bundleIdentifier, locked.contains(id) { hold(app) }
+            guard let id = app.bundleIdentifier, locked.contains(id) else { continue }
+            if inGrace(id) {
+                approved[app.processIdentifier] = id
+                gateLog.notice("\\(id, privacy: .public) pid \\(app.processIdentifier): allowed (grace period)")
+            } else {
+                hold(app)
+            }
         }
     }
 
@@ -90,6 +142,7 @@ final class Gate {
                 self.held.remove(pid)
                 self.saveHeld()
                 if ok {
+                    self.approved[pid] = id
                     kill(pid, SIGCONT)
                     app.activate()
                 } else {
