@@ -67,7 +67,7 @@ function wrapAnsi(s, width) {
   return chunks;
 }
 
-const MARKS = { ok: chalk.green("✔"), warn: chalk.yellow("!"), bad: chalk.red("✖") };
+const MARKS = { ok: "🟢", warn: "🟡", bad: "🔴" };
 const commandStyle = chalk.ansi256(75);
 
 /** Style a command the user can type, e.g. in a result hint. */
@@ -93,13 +93,13 @@ function wrapWords(text, width) {
 
 /**
  * What a command just did: a marked headline, then short dim detail lines (hints, next steps).
- * tone: "ok" (✔), "warn" (!), "bad" (✖).
+ * tone: "ok" (🟢), "warn" (🟡), "bad" (🔴).
  */
 export function printResult(headline, details = [], tone = "ok") {
-  const width = Math.max(20, terminalColumns() - INDENT.length - 3);
+  const width = Math.max(20, terminalColumns() - INDENT.length - 4);
   const lines = ["", `${INDENT}${MARKS[tone]} ${headline}`];
   for (const detail of details) {
-    lines.push(...wrapWords(detail, width).map((line) => `${INDENT}  ${chalk.dim(line)}`));
+    lines.push(...wrapWords(detail, width).map((line) => `${INDENT}   ${chalk.dim(line)}`));
   }
   console.log(lines.join("\n"));
 }
@@ -107,7 +107,7 @@ export function printResult(headline, details = [], tone = "ok") {
 /** An error, formatted like a result: first line marked, later lines as hints. */
 export function formatError(message) {
   const [first, ...rest] = String(message).split("\n");
-  const hints = rest.map((line) => `${INDENT}  ${chalk.dim(line.trim())}`);
+  const hints = rest.map((line) => `${INDENT}   ${chalk.dim(line.trim())}`);
   return ["", `${INDENT}${MARKS.bad} ${chalk.red(first)}`, ...hints].join("\n");
 }
 

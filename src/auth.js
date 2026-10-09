@@ -209,7 +209,7 @@ async function ensureVault() {
     clearFailures();
   } else {
     created = createVault(await promptNewPassphrase());
-    console.log(chalk.green("  ✔ Recovery passphrase set. It is not stored anywhere, so keep it safe."));
+    console.log("  🟢 Recovery passphrase set. It is not stored anywhere, so keep it safe.");
   }
   if (!created.secureEnclave) warnNoSecureEnclave();
   console.log();
@@ -287,7 +287,7 @@ async function unlockVault(reason) {
   clearFailures();
 
   if ((result.status === "broken" || result.status === "not-enrolled") && refreshSecureEnclave(vmk)) {
-    console.log(chalk.green("  ✔ Touch ID is on again for this Mac."));
+    console.log("  🟢 Touch ID is on again for this Mac.");
   }
   return vmk;
 }
@@ -301,7 +301,7 @@ export async function replaceVault(archiveDir) {
   const moved = archiveVault(archiveDir);
   clearFailures();
   const created = createVault(passphrase);
-  console.log(chalk.green("  ✔ Recovery passphrase set. It is not stored anywhere, so keep it safe."));
+  console.log("  🟢 Recovery passphrase set. It is not stored anywhere, so keep it safe.");
   if (!created.secureEnclave) warnNoSecureEnclave();
   return moved;
 }
