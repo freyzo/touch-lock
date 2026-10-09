@@ -26,7 +26,7 @@ import {
   printResult,
   displayPath,
   formatError,
-  renderGuide,
+  renderHelp,
   cmd,
   printLockedTargets,
   printStatusSummary,
@@ -379,48 +379,46 @@ function lockState(entry) {
   return { label: entry.autoLockAt ? `open until ${clockTime(entry.autoLockAt)}` : "open", tone: "warn" };
 }
 
-const GUIDE = [
-  {
-    title: "Lock and open",
-    items: [
-      ["tlock <folder>", "Lock a folder, or lock it again after opening"],
-      ['tlock "App Name"', "Lock an app"],
-      ["tlock -u <folder>", "Open a locked folder"],
-      ["tlock -u <folder> --for 30m", "Open it, lock again after 30 minutes"],
-      ["tlock -a", "Lock every open folder now"],
-    ],
-  },
-  {
-    title: "Check",
-    items: [
-      ["tlock list", "Everything tlock has locked"],
-      ["tlock status [target]", "Whether one folder or app is locked"],
-      ["tlock autolock", "When open folders lock themselves"],
-    ],
-  },
-  {
-    title: "Undo",
-    items: [
-      ["tlock -r <target>", "Remove the lock and restore it as normal"],
-      ["tlock -s <folder>", "Destroy a locked folder for good"],
-      ["tlock reset", "Forgot your recovery passphrase"],
-    ],
-  },
-  {
-    title: "Other",
-    items: [
-      ["tlock -v", "Show the version"],
-      ["tlock -h", "Show this help"],
-    ],
-  },
-];
-
 function mainHelp() {
-  return renderGuide(
-    "Lock folders and apps behind Touch ID.",
-    GUIDE,
-    "Details for one command: tlock <command> -h"
-  );
+  return renderHelp({
+    usage: ["tlock [OPTION]... TARGET", "tlock COMMAND [OPTION]... [TARGET]"],
+    summary: [
+      "Lock folders and apps behind Touch ID on macOS.",
+      "With no COMMAND, lock TARGET: a folder path or an app name.",
+    ],
+    sections: [
+      {
+        title: "Commands",
+        items: [
+          ["unlock, -u TARGET", "open a locked folder, or launch a locked app"],
+          ["remove, -r TARGET", "remove the lock and restore TARGET"],
+          ["shred, -s FOLDER", "destroy a locked folder for good"],
+          ["list", "list locked folders and apps"],
+          ["status [TARGET]", "show whether TARGET is locked; with no TARGET, totals"],
+          ["autolock", "show or change when open folders lock themselves"],
+          ["reset", "set a new recovery passphrase if you forgot it"],
+        ],
+      },
+      {
+        title: "Options",
+        items: [
+          ["-a, --all", "lock every open folder"],
+          ["    --for DURATION", "with unlock: lock again after DURATION (30m, 2h)"],
+          ["-h, --help", "display this help and exit"],
+          ["-v, --version", "output version information and exit"],
+        ],
+      },
+      {
+        title: "Examples",
+        items: [
+          ["tlock ~/Taxes", "lock a folder"],
+          ['tlock "Brave Browser"', "lock an app"],
+          ["tlock -u ~/Taxes --for 30m", "open a folder for 30 minutes"],
+        ],
+      },
+    ],
+    footer: ["Run 'tlock COMMAND --help' for more on a command."],
+  });
 }
 
 // ─── CLI ────────────────────────────────────────────────────────────
@@ -439,22 +437,23 @@ program.configureHelp({
 
 program
   .name("tlock")
-  .description(chalk.dim("Lock folders and apps with Touch ID on macOS"))
-  .version(VERSION, "-v, --version", "Show the version")
-  .helpOption("-h, --help", "Show help")
-  .option("-u, --unlock <target>", "Unlock a locked folder/app")
-  .option("--for <duration>", "With --unlock: lock the folder again after this long (e.g. 30m, 2h)")
-  .option("-a, --all", "Lock every unlocked folder now")
-  .option("-r, --remove <target>", "Permanently remove lock and restore target")
-  .option("-s, --shred <target>", "Destroy a locked folder for good (no restore)")
-  .configureOutput({ outputError: (text, write) => write(`${formatError(text.replace(/^error: /, "").trim())}\n`) });
+  .description("lock folders and apps behind Touch ID on macOS")
+  .version(VERSION, "-v, --version", "output version information and exit")
+  .helpOption("-h, --help", "display this help and exit")
+  .option("-u, --unlock <TARGET>", "open a locked folder, or launch a locked app")
+  .option("--for <DURATION>", "with unlock: lock again after DURATION (30m, 2h)")
+  .option("-a, --all", "lock every open folder")
+  .option("-r, --remove <TARGET>", "remove the lock and restore TARGET")
+  .option("-s, --shred <FOLDER>", "destroy a locked folder for good")
+  .configureOutput({ outputError: (text, write) => write(`${formatError(text.replace(/^error: /, "").trim())}\n${chalk.dim("     Try 'tlock --help' for more information.")}\n`) });
 
-// The main screen is a grouped guide; subcommands keep commander's generated help.
+// The main screen is hand-written; subcommands use commander's generated help with the same wording.
+program.configureHelp({ ...program.configureHelp(), showGlobalOptions: false });
 program.helpInformation = mainHelp;
 
 // Default command: lock a target
 program
-  .argument("[target]", "folder path or app name to lock (run again on an unlocked folder to lock it)")
+  .argument("[TARGET]", "folder path or app name to lock")
   .action(
     withErrorHandling(async (target) => {
       const options = program.opts();
@@ -502,15 +501,17 @@ program
 
 // unlock
 program
-  .command("unlock <target>")
-  .description("Unlock a locked folder, or launch a locked app")
-  .option("--for <duration>", "Lock the folder again after this long (e.g. 30m, 2h)")
+  .command("unlock <TARGET>")
+  .usage("[OPTION]... TARGET")
+  .description("open a locked folder, or launch a locked app")
+  .option("--for <DURATION>", "lock the folder again after DURATION (30m, 2h)")
   .action(withErrorHandling((target, options) => runUnlock(target, options.for ?? program.opts().for)));
 
 // list
 program
   .command("list")
-  .description("List all locked targets")
+  .usage("[OPTION]...")
+  .description("list locked folders and apps")
   .action(
     withErrorHandling(async () => {
       const entries = getLockRegistry();
@@ -524,36 +525,41 @@ program
 
 // remove
 program
-  .command("remove <target>")
-  .description("Permanently remove lock and restore target")
-  .option("-f, --force", "Forget the lock even when there is nothing to restore (image or app binary missing)")
+  .command("remove <TARGET>")
+  .usage("[OPTION]... TARGET")
+  .description("remove the lock and restore TARGET")
+  .option("-f, --force", "forget the lock even if there is nothing to restore")
   .action(withErrorHandling((target, options) => runRemove(target, options)));
 
 // shred
 program
-  .command("shred <target>")
-  .description("Destroy a locked folder for good: erase its keys and delete the image (no restore)")
+  .command("shred <FOLDER>")
+  .usage("FOLDER")
+  .description("destroy a locked folder for good: erase its keys and delete its image")
   .action(withErrorHandling((target) => runShred(target)));
 
 // autolock
 program
   .command("autolock")
-  .description("Show or change when unlocked folders lock themselves")
-  .option("--idle <duration>", "Lock after this long without keyboard/mouse input (e.g. 15m), or off")
-  .option("--sleep <on|off>", "Lock when the Mac sleeps")
-  .option("--screen-lock <on|off>", "Lock when the screen locks or another user switches in")
+  .usage("[OPTION]...")
+  .description("show or change when open folders lock themselves")
+  .option("--idle <DURATION>", "lock after DURATION without input (15m), or off")
+  .option("--sleep <on|off>", "lock when the Mac sleeps")
+  .option("--screen-lock <on|off>", "lock when the screen locks")
   .action(withErrorHandling(async (options) => runAutolock(options)));
 
 // reset
 program
   .command("reset")
-  .description("Forgot the recovery passphrase: set a new one (locked folders are moved aside)")
+  .usage("[OPTION]...")
+  .description("set a new recovery passphrase if you forgot it; locked folders are moved aside")
   .action(withErrorHandling(() => runReset()));
 
 // status
 program
-  .command("status [target]")
-  .description("Show lock status of a target (exit code 1 if not locked) or all targets")
+  .command("status [TARGET]")
+  .usage("[TARGET]")
+  .description("show whether TARGET is locked (exit status 1 if not); with no TARGET, totals")
   .action(
     withErrorHandling(async (target) => {
       if (!target) {

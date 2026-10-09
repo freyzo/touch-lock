@@ -112,31 +112,31 @@ export function formatError(message) {
 }
 
 /**
- * Grouped command guide for the main help screen.
- * sections: [{ title, items: [[command, description]] }]. Commands and descriptions share a
- * line when the terminal is wide enough; otherwise each description goes under its command.
+ * GNU-style help: Usage lines, a summary, then two-column sections, e.g.
+ * { title: "Options", items: [["-h, --help", "display this help and exit"]] }.
+ * Terms and descriptions share a line when they fit; otherwise the description goes below.
  */
-export function renderGuide(intro, sections, outro) {
-  const width = terminalColumns() - INDENT.length - 1;
-  const commandW = Math.max(...sections.flatMap((section) => section.items.map(([command]) => command.length)));
-  const descriptionW = Math.max(...sections.flatMap((section) => section.items.map(([, text]) => text.length)));
-  const sideBySide = 2 + commandW + 3 + Math.min(descriptionW, 24) <= width;
+export function renderHelp({ usage, summary, sections, footer }) {
+  const width = terminalColumns() - 1;
+  const termW = Math.max(...sections.flatMap((section) => section.items.map(([term]) => term.length)));
+  const sideBySide = 2 + termW + 2 + 24 <= width;
 
-  const out = [`${INDENT}${intro}`];
+  const out = usage.map((line, i) => `${i === 0 ? "Usage: " : "       "}${line}`);
+  out.push(...summary.flatMap((line) => wrapWords(line, width)).map((line, i) => (i === 0 ? `\n${line}` : line)));
   for (const { title, items } of sections) {
-    out.push("", `${INDENT}${chalk.bold(title)}`);
-    for (const [command, text] of items) {
+    out.push("", chalk.bold(`${title}:`));
+    for (const [term, text] of items) {
       if (sideBySide) {
-        const descriptionLines = wrapWords(text, width - 2 - commandW - 3);
-        out.push(`${INDENT}  ${cmd(command.padEnd(commandW))}   ${descriptionLines[0]}`);
-        for (const line of descriptionLines.slice(1)) out.push(`${INDENT}  ${" ".repeat(commandW)}   ${line}`);
+        const lines = wrapWords(text, width - termW - 4);
+        out.push(`  ${cmd(term.padEnd(termW))}  ${lines[0]}`);
+        for (const line of lines.slice(1)) out.push(`  ${" ".repeat(termW)}  ${line}`);
       } else {
-        out.push(`${INDENT}  ${cmd(command)}`);
-        out.push(...wrapWords(text, width - 4).map((line) => `${INDENT}    ${chalk.dim(line)}`));
+        out.push(`  ${cmd(term)}`);
+        out.push(...wrapWords(text, width - 6).map((line) => `      ${line}`));
       }
     }
   }
-  if (outro) out.push("", `${INDENT}${chalk.dim(outro)}`);
+  if (footer) out.push("", ...footer);
   return `${out.join("\n")}\n`;
 }
 
