@@ -67,7 +67,7 @@ Use **global** install (required for the `tlock` command):
 npm i -g @freyzo/tlock
 ```
 
-After a global install, tlock prints the same banner, help and quick-reference table as `tlock -h`.
+After a global install, tlock prints the same banner and command guide as `tlock -h`.
 
 Or one-off (folders only — app locking needs the global install):
 

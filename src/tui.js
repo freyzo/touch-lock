@@ -67,7 +67,80 @@ function wrapAnsi(s, width) {
   return chunks;
 }
 
-function displayPath(p) {
+const MARKS = { ok: chalk.green("✔"), warn: chalk.yellow("!"), bad: chalk.red("✖") };
+const commandStyle = chalk.ansi256(75);
+
+/** Style a command the user can type, e.g. in a result hint. */
+export function cmd(text) {
+  return commandStyle(text);
+}
+
+/** Word-wrap text that may contain color codes, measuring only visible characters. */
+function wrapWords(text, width) {
+  const lines = [];
+  let line = "";
+  for (const word of String(text).split(" ")) {
+    if (line && vlen(line) + 1 + vlen(word) > width) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  lines.push(line);
+  return lines;
+}
+
+/**
+ * What a command just did: a marked headline, then short dim detail lines (hints, next steps).
+ * tone: "ok" (✔), "warn" (!), "bad" (✖).
+ */
+export function printResult(headline, details = [], tone = "ok") {
+  const width = Math.max(20, terminalColumns() - INDENT.length - 3);
+  const lines = ["", `${INDENT}${MARKS[tone]} ${headline}`];
+  for (const detail of details) {
+    lines.push(...wrapWords(detail, width).map((line) => `${INDENT}  ${chalk.dim(line)}`));
+  }
+  console.log(lines.join("\n"));
+}
+
+/** An error, formatted like a result: first line marked, later lines as hints. */
+export function formatError(message) {
+  const [first, ...rest] = String(message).split("\n");
+  const hints = rest.map((line) => `${INDENT}  ${chalk.dim(line.trim())}`);
+  return ["", `${INDENT}${MARKS.bad} ${chalk.red(first)}`, ...hints].join("\n");
+}
+
+/**
+ * Grouped command guide for the main help screen.
+ * sections: [{ title, items: [[command, description]] }]. Commands and descriptions share a
+ * line when the terminal is wide enough; otherwise each description goes under its command.
+ */
+export function renderGuide(intro, sections, outro) {
+  const width = terminalColumns() - INDENT.length - 1;
+  const commandW = Math.max(...sections.flatMap((section) => section.items.map(([command]) => command.length)));
+  const descriptionW = Math.max(...sections.flatMap((section) => section.items.map(([, text]) => text.length)));
+  const sideBySide = 2 + commandW + 3 + Math.min(descriptionW, 24) <= width;
+
+  const out = [`${INDENT}${intro}`];
+  for (const { title, items } of sections) {
+    out.push("", `${INDENT}${chalk.bold(title)}`);
+    for (const [command, text] of items) {
+      if (sideBySide) {
+        const descriptionLines = wrapWords(text, width - 2 - commandW - 3);
+        out.push(`${INDENT}  ${cmd(command.padEnd(commandW))}   ${descriptionLines[0]}`);
+        for (const line of descriptionLines.slice(1)) out.push(`${INDENT}  ${" ".repeat(commandW)}   ${line}`);
+      } else {
+        out.push(`${INDENT}  ${cmd(command)}`);
+        out.push(...wrapWords(text, width - 4).map((line) => `${INDENT}    ${chalk.dim(line)}`));
+      }
+    }
+  }
+  if (outro) out.push("", `${INDENT}${chalk.dim(outro)}`);
+  return `${out.join("\n")}\n`;
+}
+
+export function displayPath(p) {
   const home = process.env.HOME;
   const s = String(p);
   if (home && (s === home || s.startsWith(`${home}/`))) {
@@ -87,7 +160,7 @@ export function printKv(title, rows) {
   const labelW = Math.max(...rows.map(([label]) => vlen(label)));
   const valueW = width - labelW - gap.length;
 
-  const lines = [INDENT + chalk.cyan(title), ""];
+  const lines = [INDENT + chalk.bold(title), ""];
   for (const [label, value] of rows) {
     if (valueW < 12) {
       lines.push(INDENT + label);
@@ -276,7 +349,7 @@ export function printLockedTargets(entries, formatDate, stateOf) {
     ];
   });
 
-  console.log(`\n${renderTable([chalk.cyan("LOCKED TARGETS"), chalk.dim(counts)], columns, rows)}\n`);
+  console.log(`\n${renderTable([chalk.bold("Locked"), chalk.dim(counts)], columns, rows)}\n`);
 }
 
 /**
@@ -284,7 +357,7 @@ export function printLockedTargets(entries, formatDate, stateOf) {
  */
 export function printStatusSummary(folderCount, appCount, total) {
   console.log();
-  printKv("TLOCK STATUS", [
+  printKv("tlock status", [
     [chalk.dim("Folders"), chalk.green(String(folderCount))],
     [chalk.dim("Apps"), chalk.green(String(appCount))],
     [chalk.dim("Total"), chalk.green(String(total))],
@@ -304,5 +377,5 @@ export function printEntryStatus(entry, formatDate) {
   if (entry.dmgPath) {
     rows.push([chalk.dim("Image"), chalk.dim(displayPath(entry.dmgPath))]);
   }
-  printKv("LOCK STATUS", rows);
+  printKv("Lock status", rows);
 }

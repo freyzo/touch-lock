@@ -117,7 +117,7 @@ function migrateLegacyLocks(vmk) {
  * Password prompt for runs without a terminal (e.g. an app launched from Finder).
  */
 function promptPasswordDialog(message) {
-  const label = message.replace(/:\s*$/, "");
+  const label = message.trim().replace(/:$/, "");
   const icon = existsSync(HELPER_ICON) ? `POSIX file "${HELPER_ICON.replace(/[\\"]/g, "\\$&")}"` : "caution";
   try {
     const answer = execFileSync(BIN.osascript, [
@@ -170,17 +170,17 @@ async function promptPassword(message = "Enter password: ") {
 /**
  * Prompt the user to create the recovery passphrase (with confirmation).
  */
-async function promptNewPassphrase(heading = "First-time setup — create a recovery passphrase for tlock.") {
+async function promptNewPassphrase(heading = "  First-time setup — create a recovery passphrase for tlock.") {
   console.log(chalk.cyan(heading));
-  console.log(chalk.dim("Day to day, Touch ID or your Mac login password unlocks. The recovery passphrase is never stored."));
-  console.log(chalk.dim("If you forget it and this Mac's Secure Enclave key is lost (new Mac, reinstall), locked folders cannot be recovered.\n"));
+  console.log(chalk.dim("  Day to day, Touch ID or your Mac login password unlocks. The recovery passphrase is never stored."));
+  console.log(chalk.dim("  If you forget it and this Mac's Secure Enclave key is lost (new Mac, reinstall), locked folders cannot be recovered.\n"));
 
-  const passphrase = await promptPassword("Create recovery passphrase: ");
+  const passphrase = await promptPassword("  Create recovery passphrase: ");
   if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
     throw new Error(`Recovery passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters.`);
   }
 
-  const confirmation = await promptPassword("Confirm recovery passphrase: ");
+  const confirmation = await promptPassword("  Confirm recovery passphrase: ");
   if (passphrase !== confirmation) {
     throw new Error("Passphrases do not match.");
   }
@@ -199,9 +199,9 @@ async function ensureVault() {
 
   let created;
   if (hasOrphanedKeys()) {
-    console.log(chalk.yellow("tlock's vault.json is missing. Enter your recovery passphrase to rebuild it."));
+    console.log(chalk.yellow("  tlock's vault.json is missing. Enter your recovery passphrase to rebuild it."));
     checkCooldown();
-    created = restoreVault(await promptPassword("Recovery passphrase: "));
+    created = restoreVault(await promptPassword("  Recovery passphrase: "));
     if (!created) {
       recordFailure();
       throw new Error("That passphrase does not open any locked folder.");
@@ -209,7 +209,7 @@ async function ensureVault() {
     clearFailures();
   } else {
     created = createVault(await promptNewPassphrase());
-    console.log(chalk.green("Recovery passphrase set. It is not stored anywhere, so keep it safe."));
+    console.log(chalk.green("  ✔ Recovery passphrase set. It is not stored anywhere, so keep it safe."));
   }
   if (!created.secureEnclave) warnNoSecureEnclave();
   console.log();
@@ -217,9 +217,9 @@ async function ensureVault() {
 }
 
 function warnNoSecureEnclave() {
-  console.log(chalk.yellow("Touch ID unavailable: tlock will ask for the recovery passphrase each time."));
+  console.log(chalk.yellow("  Touch ID unavailable: tlock will ask for the recovery passphrase each time."));
   const failure = secureEnclaveHelperFailure();
-  if (failure) console.log(chalk.dim(`Touch ID helper could not be built: ${failure}`));
+  if (failure) console.log(chalk.dim(`  Touch ID helper could not be built: ${failure}`));
 }
 
 // ─── Brute-force tracking ───────────────────────────────────────────
@@ -266,19 +266,17 @@ const FALLBACK_MESSAGES = {
 };
 
 async function unlockVault(reason) {
-  console.log(chalk.dim("Authenticating..."));
   const result = openVaultWithSecureEnclave(reason);
   if (result.vmk) {
     clearFailures();
-    console.log(chalk.green("Authenticated."));
     return result.vmk;
   }
-  console.log(chalk.dim(FALLBACK_MESSAGES[result.status]));
+  console.log(chalk.dim(`  ${FALLBACK_MESSAGES[result.status]}`));
   const failure = secureEnclaveHelperFailure();
-  if (failure) console.log(chalk.dim(`Touch ID helper could not be built: ${failure}`));
+  if (failure) console.log(chalk.dim(`  Touch ID helper could not be built: ${failure}`));
 
   checkCooldown();
-  const vmk = openVaultWithPassphrase(await promptPassword("Recovery passphrase: "));
+  const vmk = openVaultWithPassphrase(await promptPassword("  Recovery passphrase: "));
   if (!vmk) {
     recordFailure();
     const remaining = MAX_FAILURES - getRecentFailures().length;
@@ -287,10 +285,9 @@ async function unlockVault(reason) {
     );
   }
   clearFailures();
-  console.log(chalk.green("Authenticated via recovery passphrase."));
 
   if ((result.status === "broken" || result.status === "not-enrolled") && refreshSecureEnclave(vmk)) {
-    console.log(chalk.dim("Touch ID / login password unlocking re-enabled for this Mac."));
+    console.log(chalk.green("  ✔ Touch ID is on again for this Mac."));
   }
   return vmk;
 }
@@ -300,11 +297,11 @@ async function unlockVault(reason) {
  * (they still open with the old passphrase if it turns up), then a new vault is created.
  */
 export async function replaceVault(archiveDir) {
-  const passphrase = await promptNewPassphrase("Create a new recovery passphrase for tlock.");
+  const passphrase = await promptNewPassphrase("  Create a new recovery passphrase for tlock.");
   const moved = archiveVault(archiveDir);
   clearFailures();
   const created = createVault(passphrase);
-  console.log(chalk.green("Recovery passphrase set. It is not stored anywhere, so keep it safe."));
+  console.log(chalk.green("  ✔ Recovery passphrase set. It is not stored anywhere, so keep it safe."));
   if (!created.secureEnclave) warnNoSecureEnclave();
   return moved;
 }

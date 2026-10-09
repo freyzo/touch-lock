@@ -19,10 +19,15 @@ import {
   updateSettings,
   TLOCK_STORAGE_DIR,
 } from "../src/config.js";
-import { parseDuration, describeAutoLock, ensureWatcher, runWatcher } from "../src/autolock.js";
+import { parseDuration, ensureWatcher, runWatcher } from "../src/autolock.js";
 import {
   clockTime,
   printKv,
+  printResult,
+  displayPath,
+  formatError,
+  renderGuide,
+  cmd,
   printLockedTargets,
   printStatusSummary,
   printEntryStatus,
@@ -58,7 +63,7 @@ function gradientLine(str) {
 /** Big ASCII banner only for a bare `tlock` and --help/-h. */
 function shouldShowBanner() {
   const argv = process.argv.slice(2);
-  return argv.length === 0 || argv.includes("--help") || argv.includes("-h");
+  return argv.length === 0 || (argv.length === 1 && ["-h", "--help"].includes(argv[0]));
 }
 
 // Letters from the figlet "ANSI Shadow" font, built in so the banner needs no dependency.
@@ -180,7 +185,7 @@ function findEntryForTarget(target, command) {
     );
   }
   if (matches.length === 1) {
-    console.log(chalk.dim(`Using lock: ${matches[0].target}`));
+    console.log(chalk.dim(`  Using ${matches[0].target}`));
     return matches[0];
   }
   return null;
@@ -221,18 +226,17 @@ async function runUnlock(target, forDuration) {
   const autoLockAt = forDuration ? Date.now() + parseDuration(forDuration) : undefined;
   await unlockFolder(entry, { autoLockAt });
   ensureWatcher({ hasTimer: Boolean(autoLockAt) });
-  console.log(chalk.dim(`  ${describeAutoLock(getSettings(), autoLockAt)} Change with \`tlock autolock\`.`));
 }
 
 function runLockAll() {
   const { locked, busy } = lockAllFolders();
   if (locked.length === 0 && busy.length === 0) {
-    console.log(chalk.dim("No unlocked folders."));
+    printResult("Nothing to lock");
     return;
   }
-  for (const target of locked) console.log(chalk.green(`  Locked ${target}`));
+  for (const target of locked) printResult(`Locked ${displayPath(target)}`);
   for (const { target } of busy) {
-    console.log(chalk.yellow(`  In use, not locked: ${target} — close its files and run tlock --all again.`));
+    printResult(`${target} is in use, not locked`, [`Close its files, then run ${cmd("tlock --all")} again.`], "warn");
   }
   if (busy.length > 0) process.exitCode = 1;
 }
@@ -258,12 +262,12 @@ function runAutolock(options) {
   const settings = getSettings();
   const onOff = (value) => (value ? chalk.green("on") : chalk.dim("off"));
   console.log();
-  printKv("AUTO-LOCK", [
+  printKv("Auto-lock", [
     [chalk.dim("Screen lock"), onOff(settings.lockOnScreenLock)],
     [chalk.dim("Sleep"), onOff(settings.lockOnSleep)],
     [chalk.dim("Idle"), settings.idleMinutes > 0 ? chalk.green(`${settings.idleMinutes} min`) : chalk.dim("off")],
   ]);
-  console.log(chalk.dim("  Applies to unlocked folders. Per unlock: tlock unlock <folder> --for 30m"));
+  console.log();
 }
 
 async function runRemove(target, { force = false } = {}) {
@@ -315,18 +319,18 @@ async function runReset() {
     );
   }
 
-  console.log(chalk.yellow("\n  Reset the recovery passphrase\n"));
+  console.log(chalk.bold("\n  Reset the recovery passphrase\n"));
   console.log("  Use this only if you forgot your recovery passphrase and Touch ID does not work.");
   if (folders.length > 0) {
-    console.log(chalk.red(`\n  These locked folders cannot be opened without the old passphrase:`));
-    for (const entry of folders) console.log(`    ${entry.target}`);
+    console.log(chalk.yellow(`\n  ! These locked folders cannot be opened without the old passphrase:`));
+    for (const entry of folders) console.log(`    ${displayPath(entry.target)}`);
     console.log(chalk.dim("\n  Their encrypted images are moved aside, not deleted. If you remember the old passphrase"));
     console.log(chalk.dim("  later, move the files back into ~/.tlock to recover them."));
   }
   console.log(chalk.dim("  Locked apps stay locked and will use the new passphrase.\n"));
 
   if ((await askLine("  Type reset to continue: ")) !== "reset") {
-    console.log(chalk.dim("  Cancelled. Nothing changed."));
+    printResult("Cancelled", [], "warn");
     return;
   }
 
@@ -341,11 +345,7 @@ async function runReset() {
     removeEntry(entry.target);
   }
 
-  console.log();
-  printKv("RESET", [
-    [chalk.dim("Folders"), folders.length > 0 ? `${folders.length} lock(s) removed` : chalk.dim("none")],
-    [chalk.dim("Old files"), chalk.dim(archiveDir.replace(process.env.HOME, "~"))],
-  ]);
+  printResult("Reset done");
 }
 
 /**
@@ -356,7 +356,7 @@ function withErrorHandling(asyncAction) {
     try {
       await asyncAction(...args);
     } catch (error) {
-      console.error(chalk.red(`\nError: ${error.message}`));
+      console.error(formatError(error.message));
       process.exit(1);
     }
   };
@@ -379,26 +379,48 @@ function lockState(entry) {
   return { label: entry.autoLockAt ? `open until ${clockTime(entry.autoLockAt)}` : "open", tone: "warn" };
 }
 
-const QUICK_REFERENCE = [
-  ["Lock a folder", "tlock <folder>"],
-  ["Lock an app", 'tlock "App Name"'],
-  ["Open a locked folder", "tlock -u <folder>"],
-  ["Open it for a while", "tlock -u <folder> --for 30m"],
-  ["Lock it again", "tlock <folder>"],
-  ["Lock everything now", "tlock --all"],
-  ["Auto-lock rules", "tlock autolock --idle 15m"],
-  ["See your locks", "tlock list"],
-  ["Restore normal folder/app", "tlock -r <target>"],
-  ["Destroy a folder for good", "tlock -s <folder>"],
+const GUIDE = [
+  {
+    title: "Lock and open",
+    items: [
+      ["tlock <folder>", "Lock a folder, or lock it again after opening"],
+      ['tlock "App Name"', "Lock an app"],
+      ["tlock -u <folder>", "Open a locked folder"],
+      ["tlock -u <folder> --for 30m", "Open it, lock again after 30 minutes"],
+      ["tlock -a", "Lock every open folder now"],
+    ],
+  },
+  {
+    title: "Check",
+    items: [
+      ["tlock list", "Everything tlock has locked"],
+      ["tlock status [target]", "Whether one folder or app is locked"],
+      ["tlock autolock", "When open folders lock themselves"],
+    ],
+  },
+  {
+    title: "Undo",
+    items: [
+      ["tlock -r <target>", "Remove the lock and restore it as normal"],
+      ["tlock -s <folder>", "Destroy a locked folder for good"],
+      ["tlock reset", "Forgot your recovery passphrase"],
+    ],
+  },
+  {
+    title: "Other",
+    items: [
+      ["tlock -v", "Show the version"],
+      ["tlock -h", "Show this help"],
+    ],
+  },
 ];
 
-function quickReference() {
-  const columns = [
-    { header: "Task", min: 16 },
-    { header: "Command", min: 28 },
-  ];
-  const rows = QUICK_REFERENCE.map(([task, command]) => [{ text: task }, { text: command, style: blueLt }]);
-  return `\n${renderTable(blue("QUICK REFERENCE"), columns, rows)}\n`;
+function mainHelp() {
+  return renderGuide(
+    "Lock folders and apps behind Touch ID.",
+    GUIDE,
+    "Details for one command: tlock <command> -h"
+  );
 }
 
 // ─── CLI ────────────────────────────────────────────────────────────
@@ -418,13 +440,17 @@ program.configureHelp({
 program
   .name("tlock")
   .description(chalk.dim("Lock folders and apps with Touch ID on macOS"))
-  .version(VERSION)
+  .version(VERSION, "-v, --version", "Show the version")
+  .helpOption("-h, --help", "Show help")
   .option("-u, --unlock <target>", "Unlock a locked folder/app")
   .option("--for <duration>", "With --unlock: lock the folder again after this long (e.g. 30m, 2h)")
   .option("-a, --all", "Lock every unlocked folder now")
   .option("-r, --remove <target>", "Permanently remove lock and restore target")
   .option("-s, --shred <target>", "Destroy a locked folder for good (no restore)")
-  .addHelpText("after", quickReference);
+  .configureOutput({ outputError: (text, write) => write(`${formatError(text.replace(/^error: /, "").trim())}\n`) });
+
+// The main screen is a grouped guide; subcommands keep commander's generated help.
+program.helpInformation = mainHelp;
 
 // Default command: lock a target
 program
@@ -540,7 +566,7 @@ program
       }
       const entry = findEntryForTarget(target, "status");
       if (!entry) {
-        console.log(chalk.dim(`Not locked: ${target}`));
+        printResult(`${target} is not locked`, [], "warn");
         process.exitCode = 1;
         return;
       }

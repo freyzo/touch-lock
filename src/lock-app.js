@@ -16,11 +16,16 @@ import chalk from "chalk";
 import { addEntry, getEntry, removeEntry, canonicalPath } from "./config.js";
 import { authenticate } from "./auth.js";
 import { BIN } from "./bins.js";
-import { printKv } from "./tui.js";
+import { printResult, cmd } from "./tui.js";
 
 const ORIGINAL_BINARY_SUFFIX = ".tlock-original";
 const WRAPPER_HEADER = "#!/bin/bash\n# tlock wrapper";
 const TLOCK_SCRIPT = fileURLToPath(new URL("../bin/tlock.js", import.meta.url));
+
+/** "Brave Browser" for /Applications/Brave Browser.app. */
+function appName(appPath) {
+  return basename(appPath, ".app");
+}
 
 /**
  * Resolve an app name or .app path to a bundle path.
@@ -229,11 +234,7 @@ export async function lockApp(appNameOrPath) {
     }
     installWrapper(binaryPath, renamedBinaryPath, { moveOriginal: false });
     if (!existing) addEntry({ target: appPath, type: "app", executableName });
-    console.log();
-    printKv("LOCKED APP", [
-      [chalk.dim("App"), chalk.green(basename(appPath))],
-      [chalk.dim("Note"), chalk.dim("Already locked — wrapper refreshed.")],
-    ]);
+    printResult(`${appName(appPath)} is already locked`);
     return;
   }
 
@@ -242,16 +243,13 @@ export async function lockApp(appNameOrPath) {
   }
   if (existing) {
     // An app update or reinstall replaced the wrapper: re-apply the lock.
-    console.log(chalk.dim("Lock was lost (app updated?) — re-applying."));
+    console.log(chalk.dim("  The lock was lost (app updated?), re-applying it."));
     removeEntry(appPath);
   }
 
   await authenticate(`lock “${basename(appPath)}”`);
 
   addEntry({ target: appPath, type: "app", executableName });
-  console.log(
-    chalk.dim(`Renaming binary: ${executableName} -> ${executableName}${ORIGINAL_BINARY_SUFFIX}`)
-  );
   try {
     installWrapper(binaryPath, renamedBinaryPath, { moveOriginal: true });
   } catch (error) {
@@ -261,11 +259,7 @@ export async function lockApp(appNameOrPath) {
     );
   }
 
-  console.log();
-  printKv("LOCKED APP", [
-    [chalk.dim("App"), chalk.green(basename(appPath))],
-    [chalk.dim("Note"), chalk.dim("Touch ID or password required before launch.")],
-  ]);
+  printResult(`Locked ${appName(appPath)}`);
 }
 
 /**
@@ -278,16 +272,12 @@ export function unlockApp(entry) {
   }
   const { binaryPath } = appBinaryPaths(appPath, entry.executableName);
   if (!isTlockWrapper(binaryPath)) {
-    console.log(chalk.yellow(
-      `${basename(appPath)} is no longer locked (app updated?). Run \`tlock ${appPath}\` to lock it again.`
-    ));
+    printResult(`${appName(appPath)} is no longer locked`, [
+      `The app probably updated itself. Lock it again with ${cmd(`tlock "${appName(appPath)}"`)}`,
+    ], "warn");
   }
 
-  console.log();
-  printKv("LAUNCH", [
-    [chalk.dim("App"), chalk.green(basename(appPath))],
-    [chalk.dim("Note"), chalk.dim("Authenticate in the tlock prompt.")],
-  ]);
+  printResult(`Opening ${appName(appPath)}`);
   execFileSync(BIN.open, ["-a", appPath], { stdio: "ignore" });
 }
 
@@ -308,20 +298,16 @@ export async function removeApp(entry, { force = false } = {}) {
       );
     }
     removeEntry(appPath);
-    console.log(chalk.dim(wrapped
-      ? `Forgot the lock for ${basename(appPath)}. Reinstall the app to repair it.`
-      : `Nothing to restore for ${basename(appPath)} (app removed or updated) — removed it from tlock.`));
+    printResult(`Forgot the lock on ${appName(appPath)}`);
     return;
   }
 
   await authenticate(`remove the lock on “${basename(appPath)}”`);
 
-  console.log(chalk.dim("Restoring original binary..."));
   renameSync(renamedBinaryPath, binaryPath);
   chmodSync(binaryPath, 0o755);
 
   removeEntry(appPath);
 
-  console.log();
-  printKv("UNLOCKED APP", [[chalk.dim("App"), chalk.green(basename(appPath))]]);
+  printResult(`Unlocked ${appName(appPath)}`);
 }

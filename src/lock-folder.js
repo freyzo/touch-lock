@@ -28,7 +28,7 @@ import { authenticate, getLegacyPassword } from "./auth.js";
 import { imageKeyPath, writeImageKey, readImageKey } from "./vault.js";
 import { wipeTree, destroyFile, resetQuickLookCache, flushMetadata } from "./shred.js";
 import { BIN } from "./bins.js";
-import { printKv } from "./tui.js";
+import { printResult, cmd, displayPath } from "./tui.js";
 
 // Sparse bundle: only used space is stored, in 8 MB bands that Time Machine backs up incrementally.
 const IMAGE_MAX_SIZE = "1t";
@@ -268,11 +268,15 @@ function relockFolder(entry) {
   }
   ejectFolder(entry);
 
-  console.log();
-  printKv("LOCKED FOLDER", [
-    [chalk.dim("Path"), chalk.green(entry.target)],
-    [chalk.dim("Image"), chalk.dim(entry.dmgPath)],
-  ]);
+  printResult(`Locked ${displayPath(entry.target)}`);
+}
+
+/** A path the user can paste back into the shell: ~ for home, quoted if it has spaces. */
+function shellPath(path) {
+  const shown = displayPath(path);
+  if (!/[\s'"()&;$]/.test(shown)) return shown;
+  // ~ only expands outside quotes, so quote just the part after it.
+  return shown.startsWith("~/") ? `~/"${shown.slice(2)}"` : `"${shown}"`;
 }
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -323,7 +327,6 @@ export async function lockFolder(folderPath) {
     spinner.stop();
   }
   chmodSync(imagePath, 0o700);
-  console.log(chalk.green("  Encrypted volume created"));
 
   // Register before deleting anything, so the data is never unreachable through tlock.
   try {
@@ -345,13 +348,8 @@ export async function lockFolder(folderPath) {
     rmSpinner.stop();
   }
   resetQuickLookCache();
-  console.log(chalk.dim("  Original folder overwritten and removed"));
 
-  console.log();
-  printKv("LOCKED FOLDER", [
-    [chalk.dim("Path"), chalk.green(absolutePath)],
-    [chalk.dim("Image"), chalk.dim(imagePath)],
-  ]);
+  printResult(`Locked ${displayPath(absolutePath)}`);
 }
 
 /**
@@ -366,7 +364,7 @@ export async function unlockFolder(entry, { autoLockAt } = {}) {
   }
   if (isMountPoint(absolutePath)) {
     if (autoLockAt) updateEntry(absolutePath, { autoLockAt });
-    console.log(chalk.dim(`Already unlocked: ${absolutePath}`));
+    printResult(`${displayPath(absolutePath)} is already open`);
     return;
   }
 
@@ -379,19 +377,14 @@ export async function unlockFolder(entry, { autoLockAt } = {}) {
   } finally {
     spinner.stop();
   }
-  console.log(chalk.green("  Volume mounted"));
   updateEntry(absolutePath, { autoLockAt });
 
-  console.log();
-  printKv("UNLOCKED FOLDER", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
+  printResult(`Opened ${displayPath(absolutePath)}`);
   if (entry.dmgPath.endsWith(".dmg")) {
-    console.log(chalk.yellow(
-      `  This lock was made by an older tlock and opens read-only. To make it writable: tlock remove ${absolutePath}, then tlock ${absolutePath}.`
-    ));
+    printResult("This lock was made by an older tlock and opens read-only", [
+      `To make it writable: ${cmd(`tlock -r ${shellPath(absolutePath)}`)}, then ${cmd(`tlock ${shellPath(absolutePath)}`)}`,
+    ], "warn");
   }
-  console.log(chalk.dim(
-    `  When done, lock it again with \`tlock ${absolutePath}\` or \`tlock --all\`. To get a normal folder back: \`tlock remove ${absolutePath}\`.`
-  ));
 }
 
 /**
@@ -409,7 +402,7 @@ export async function removeFolder(entry, { force = false } = {}) {
     }
     removeEntry(absolutePath);
     rmSync(imageKeyPath(entry.dmgPath), { force: true });
-    console.log(chalk.dim(`Forgot the lock for ${absolutePath}.`));
+    printResult(`Forgot the lock on ${displayPath(absolutePath)}`);
     return;
   }
 
@@ -440,14 +433,12 @@ export async function removeFolder(entry, { force = false } = {}) {
     spinner.stop();
     removeEmptyDir(mountPoint);
   }
-  console.log(chalk.green("  Contents restored"));
 
   rmSync(entry.dmgPath, { recursive: true, force: true });
   destroyFile(imageKeyPath(entry.dmgPath));
   removeEntry(absolutePath);
 
-  console.log();
-  printKv("RESTORED", [[chalk.dim("Path"), chalk.green(absolutePath)]]);
+  printResult(`Unlocked ${displayPath(absolutePath)}`);
 }
 
 /**
@@ -472,9 +463,5 @@ export async function shredFolder(entry) {
   removeEntry(absolutePath);
   flushMetadata(absolutePath);
 
-  console.log();
-  printKv("SHREDDED", [
-    [chalk.dim("Path"), chalk.red(absolutePath)],
-    [chalk.dim("Note"), chalk.dim("Image keys erased, key file overwritten, image deleted.")],
-  ]);
+  printResult(`Destroyed ${displayPath(absolutePath)}`);
 }
