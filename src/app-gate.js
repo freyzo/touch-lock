@@ -56,9 +56,12 @@ final class Gate {
         seen = Set(NSWorkspace.shared.runningApplications.map(\\.processIdentifier))
         let locked = lockedBundleIDs()
         for pid in readLines(heldPath).compactMap({ pid_t($0) }) {
-            if let app = NSRunningApplication(processIdentifier: pid),
-               let id = app.bundleIdentifier, locked.contains(id) {
+            guard let app = NSRunningApplication(processIdentifier: pid) else { continue }
+            if let id = app.bundleIdentifier, locked.contains(id) {
                 hold(app)
+            } else {
+                // Its lock was removed while no gate was running: let it continue.
+                kill(pid, SIGCONT)
             }
         }
         saveHeld()

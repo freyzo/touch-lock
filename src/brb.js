@@ -19,7 +19,11 @@ function lockScreenUntilUnlocked(helper) {
   return new Promise((resolve, reject) => {
     execFile(helper, ["brb"], { encoding: "utf-8" }, (error, stdout, stderr) => {
       if (error) {
-        reject(new Error(`Could not lock the screen: ${stderr.trim() || error.message}\nLock it with Control-Command-Q instead.`));
+        const detail = stderr.trim() || error.message;
+        // Exit 5: the screen did lock, but stayed locked past the 12-hour limit.
+        reject(new Error(error.code === 5
+          ? `tlock brb stopped keeping the Mac awake: ${detail}`
+          : `Could not lock the screen: ${detail}\nLock it with Control-Command-Q instead.`));
         return;
       }
       const [away, asleep] = stdout.trim().split(" ").map(Number);

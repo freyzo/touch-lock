@@ -157,16 +157,16 @@ export function displayPath(p) {
   return s;
 }
 
-/**
- * Borderless key/value panel: a title, then aligned label/value lines. Nothing is drawn out to a
- * fixed edge, so resizing the window afterwards cannot break it. Long values wrap under themselves;
- * when the value column would be too narrow, values go on their own line below the label.
- */
 /** Wrap at spaces; only a word longer than the width (e.g. a path) is split mid-word. */
 function wrapValue(value, width) {
   return wrapWords(value, width).flatMap((line) => (vlen(line) > width ? wrapAnsi(line, width) : [line]));
 }
 
+/**
+ * Borderless key/value panel: a title, then aligned label/value lines. Nothing is drawn out to a
+ * fixed edge, so resizing the window afterwards cannot break it. Long values wrap under themselves;
+ * when the value column would be too narrow, values go on their own line below the label.
+ */
 export function printKv(title, rows) {
   const width = Math.max(10, terminalColumns() - INDENT.length - 1);
   const gap = "  ";
